@@ -140,6 +140,21 @@ def get_session_result(user_session_id: str) -> dict[str, object]:
     return result
 
 
+def find_session_result(user_session_id: str) -> dict[str, object] | None:
+    path = _get_session_store_path()
+    if not path.exists():
+        return None
+
+    data = load_session_store(path)
+    result = data.get(user_session_id)
+    if result is None:
+        return None
+    if not isinstance(result, dict):
+        error(f"Invalid sandbox session record: {user_session_id}")
+
+    return result
+
+
 def build_exec_url(endpoint: object) -> str:
     if not isinstance(endpoint, str) or not endpoint.strip():
         error("Sandbox session endpoint is missing")

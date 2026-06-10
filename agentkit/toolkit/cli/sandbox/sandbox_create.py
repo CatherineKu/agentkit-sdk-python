@@ -24,15 +24,24 @@ import typer
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
-from agentkit.toolkit.cli.sandbox.utils import echo_json, error, save_session_result
+from agentkit.toolkit.cli.sandbox.utils import (
+    echo_json,
+    error,
+    find_session_result,
+    save_session_result,
+)
 
 DEFAULT_SANDBOX_TTL = 28800
 SANDBOX_TOOL_ID_ENV = "AGENTKIT_SANDBOX_TOOL_ID"
 SANDBOX_TTL_ENV = "AGENTKIT_SANDBOX_TTL"
 
 
-def _resolve_tool_id(tool_id: Optional[str]) -> str:
-    resolved = (tool_id or os.getenv(SANDBOX_TOOL_ID_ENV) or "").strip()
+def _resolve_tool_id(
+    tool_id: Optional[str],
+    default_tool_id: object = None,
+) -> str:
+    default = default_tool_id if isinstance(default_tool_id, str) else ""
+    resolved = (tool_id or os.getenv(SANDBOX_TOOL_ID_ENV) or default).strip()
     if not resolved:
         error(f"--tool-id or {SANDBOX_TOOL_ID_ENV} is required")
     return resolved
@@ -50,6 +59,103 @@ def _resolve_ttl(ttl: Optional[int]) -> int:
         return int(raw)
     except ValueError:
         error(f"{SANDBOX_TTL_ENV} must be an integer")
+
+
+def _is_session_missing_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return any(
+        token in message
+        for token in (
+            "not found",
+            "not exist",
+            "notfound",
+            "not_found",
+            "不存在",
+        )
+    )
+
+
+def _build_result(
+    *,
+    user_session_id: str,
+    tool_id: str,
+    session_id: object,
+    endpoint: object,
+) -> dict[str, object]:
+    return {
+        "user_session_id": user_session_id,
+        "tool_id": tool_id,
+        "session_id": session_id,
+        "endpoint": endpoint,
+    }
+
+
+def _build_create_result(
+    response: tools_types.CreateSessionResponse,
+    user_session_id: str,
+    tool_id: str,
+) -> dict[str, object]:
+    return _build_result(
+        user_session_id=response.user_session_id or user_session_id,
+        tool_id=tool_id,
+        session_id=response.session_id,
+        endpoint=response.endpoint,
+    )
+
+
+def _build_get_result(
+    response: tools_types.GetSessionResponse,
+    existing: dict[str, object],
+    user_session_id: str,
+    tool_id: str,
+) -> dict[str, object]:
+    return _build_result(
+        user_session_id=response.user_session_id or user_session_id,
+        tool_id=tool_id,
+        session_id=response.session_id or existing.get("session_id"),
+        endpoint=response.endpoint or existing.get("endpoint"),
+    )
+
+
+def _get_existing_remote_session(
+    client: AgentkitToolsClient,
+    existing: dict[str, object],
+    user_session_id: str,
+    tool_id: str,
+) -> dict[str, object] | None:
+    session_id = existing.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        return None
+
+    try:
+        response = client.get_session(
+            tools_types.GetSessionRequest(
+                tool_id=tool_id,
+                session_id=session_id,
+            )
+        )
+    except Exception as exc:
+        if _is_session_missing_error(exc):
+            return None
+        raise
+
+    return _build_get_result(response, existing, user_session_id, tool_id)
+
+
+def _create_session(
+    client: AgentkitToolsClient,
+    user_session_id: str,
+    tool_id: str,
+    ttl: int,
+) -> dict[str, object]:
+    request = tools_types.CreateSessionRequest(
+        tool_id=tool_id,
+        ttl=ttl,
+        ttl_unit="second",
+        user_session_id=user_session_id,
+    )
+    response = client.create_session(request)
+    return _build_create_result(response, user_session_id, tool_id)
 
 
 def create_command(
@@ -74,28 +180,43 @@ def create_command(
 ) -> None:
     """Create a sandbox session."""
     resolved_user_session_id = user_session_id or str(uuid.uuid4())
-    resolved_tool_id = _resolve_tool_id(tool_id)
-    resolved_ttl = _resolve_ttl(ttl)
+    existing = (
+        find_session_result(resolved_user_session_id) if user_session_id else None
+    )
+    existing_tool_id = (
+        _resolve_tool_id(None, default_tool_id=existing.get("tool_id"))
+        if existing
+        else None
+    )
+    resolved_tool_id = _resolve_tool_id(
+        tool_id,
+        default_tool_id=existing.get("tool_id") if existing else None,
+    )
 
     try:
         client = AgentkitToolsClient()
-        request = tools_types.CreateSessionRequest(
-            tool_id=resolved_tool_id,
-            ttl=resolved_ttl,
-            ttl_unit="second",
-            user_session_id=resolved_user_session_id,
+        if existing:
+            result = _get_existing_remote_session(
+                client,
+                existing,
+                resolved_user_session_id,
+                existing_tool_id or resolved_tool_id,
+            )
+            if result:
+                save_session_result(result)
+                echo_json(result)
+                return
+
+        result = _create_session(
+            client,
+            resolved_user_session_id,
+            resolved_tool_id,
+            _resolve_ttl(ttl),
         )
-        response = client.create_session(request)
     except typer.Exit:
         raise
     except Exception as exc:
         error(str(exc))
 
-    result = {
-        "user_session_id": response.user_session_id or resolved_user_session_id,
-        "tool_id": resolved_tool_id,
-        "session_id": response.session_id,
-        "endpoint": response.endpoint,
-    }
     save_session_result(result)
     echo_json(result)

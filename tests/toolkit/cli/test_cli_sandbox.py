@@ -28,19 +28,43 @@ class _FakeCreateSessionResponse:
     endpoint = "https://sandbox.example.com"
 
 
+class _FakeGetSessionResponse:
+    user_session_id = "user-session-from-api"
+    session_id = "session-from-api"
+    endpoint = "https://sandbox.example.com"
+
+
 class _FakeToolsClient:
     last_request = None
+    last_get_request = None
     response = _FakeCreateSessionResponse()
+    get_response = _FakeGetSessionResponse()
+    get_error = None
+    create_call_count = 0
+    get_call_count = 0
 
     def create_session(self, request):
         _FakeToolsClient.last_request = request
+        _FakeToolsClient.create_call_count += 1
         return _FakeToolsClient.response
+
+    def get_session(self, request):
+        _FakeToolsClient.last_get_request = request
+        _FakeToolsClient.get_call_count += 1
+        if _FakeToolsClient.get_error:
+            raise _FakeToolsClient.get_error
+        return _FakeToolsClient.get_response
 
 
 @pytest.fixture(autouse=True)
 def _reset_fake_client():
     _FakeToolsClient.last_request = None
+    _FakeToolsClient.last_get_request = None
     _FakeToolsClient.response = _FakeCreateSessionResponse()
+    _FakeToolsClient.get_response = _FakeGetSessionResponse()
+    _FakeToolsClient.get_error = None
+    _FakeToolsClient.create_call_count = 0
+    _FakeToolsClient.get_call_count = 0
 
 
 def _patch_store_path(monkeypatch, tmp_path):
@@ -131,16 +155,73 @@ def test_sandbox_create_requires_tool_id(monkeypatch, tmp_path) -> None:
     assert "--tool-id or AGENTKIT_SANDBOX_TOOL_ID is required" in result.output
 
 
-def test_sandbox_create_upserts_by_user_session_id(monkeypatch, tmp_path) -> None:
+def test_sandbox_create_reuses_existing_remote_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.sandbox_create as sandbox_create
 
-    class FirstResponse:
+    class ExistingResponse:
         user_session_id = "same-user-session"
-        session_id = "session-old"
-        endpoint = "https://old.example.com"
+        session_id = "session-existing"
+        endpoint = "https://remote.example.com"
 
-    class SecondResponse:
+    monkeypatch.setattr(
+        sandbox_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    store_path.write_text(
+        json.dumps(
+            {
+                "same-user-session": {
+                    "user_session_id": "same-user-session",
+                    "tool_id": "tool-stored",
+                    "session_id": "session-existing",
+                    "endpoint": "https://local.example.com",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _FakeToolsClient.get_response = ExistingResponse()
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "create",
+            "--user-session-id",
+            "same-user-session",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-stored"
+    assert _FakeToolsClient.last_get_request.session_id == "session-existing"
+    assert json.loads(result.output) == {
+        "user_session_id": "same-user-session",
+        "tool_id": "tool-stored",
+        "session_id": "session-existing",
+        "endpoint": "https://remote.example.com",
+    }
+
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert stored["same-user-session"] == json.loads(result.output)
+
+
+def test_sandbox_create_recreates_when_remote_session_missing(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.sandbox_create as sandbox_create
+
+    class NewResponse:
         user_session_id = "same-user-session"
         session_id = "session-new"
         endpoint = "https://new.example.com"
@@ -151,23 +232,23 @@ def test_sandbox_create_upserts_by_user_session_id(monkeypatch, tmp_path) -> Non
         lambda: _FakeToolsClient(),
     )
     store_path = _patch_store_path(monkeypatch, tmp_path)
-
-    _FakeToolsClient.response = FirstResponse()
-    first = runner.invoke(
-        app,
-        [
-            "sandbox",
-            "create",
-            "--tool-id",
-            "tool-old",
-            "--user-session-id",
-            "same-user-session",
-        ],
+    store_path.write_text(
+        json.dumps(
+            {
+                "same-user-session": {
+                    "user_session_id": "same-user-session",
+                    "tool_id": "tool-stored",
+                    "session_id": "session-old",
+                    "endpoint": "https://old.example.com",
+                }
+            }
+        ),
+        encoding="utf-8",
     )
-    assert first.exit_code == 0
+    _FakeToolsClient.get_error = Exception("Session not found")
+    _FakeToolsClient.response = NewResponse()
 
-    _FakeToolsClient.response = SecondResponse()
-    second = runner.invoke(
+    result = runner.invoke(
         app,
         [
             "sandbox",
@@ -178,7 +259,13 @@ def test_sandbox_create_upserts_by_user_session_id(monkeypatch, tmp_path) -> Non
             "same-user-session",
         ],
     )
-    assert second.exit_code == 0
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-stored"
+    assert _FakeToolsClient.last_get_request.session_id == "session-old"
+    assert _FakeToolsClient.last_request.tool_id == "tool-new"
 
     stored = json.loads(store_path.read_text(encoding="utf-8"))
     assert list(stored) == ["same-user-session"]

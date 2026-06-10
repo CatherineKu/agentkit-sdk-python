@@ -39,6 +39,11 @@ python3 -m pip show agentkit-sdk-python
 ### Create
 
 Create a sandbox session through `CreateSession` and persist the result locally.
+When `--user-session-id` is provided, the command is idempotent: it first checks
+`.agentkit/sandbox/sessions.json`; if a local record exists, it calls
+`GetSession` with the stored `session_id` to verify the remote session. Existing
+remote sessions are returned and refreshed in the local store. Missing remote
+sessions are recreated through `CreateSession`.
 
 ```bash
 agentkit sandbox create \
