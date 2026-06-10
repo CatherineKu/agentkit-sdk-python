@@ -29,9 +29,9 @@ class _FakeCreateSessionResponse:
 
 
 class _FakeGetSessionResponse:
-    user_session_id = "user-session-from-api"
-    session_id = "session-from-api"
-    endpoint = "https://sandbox.example.com"
+    user_session_id = None
+    session_id = None
+    endpoint = None
 
 
 class _FakeToolsClient:
@@ -75,31 +75,50 @@ def _patch_store_path(monkeypatch, tmp_path):
     return store_path
 
 
-def test_sandbox_create_uses_env_defaults(monkeypatch, tmp_path) -> None:
-    from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_create as sandbox_create
+def _patch_exec_session(monkeypatch, cli_exec, session):
+    def fake_ensure_sandbox_session(session_id=None, tool_id=None):
+        return session
+
+    monkeypatch.setattr(
+        cli_exec,
+        "ensure_sandbox_session",
+        fake_ensure_sandbox_session,
+    )
+
+
+def _patch_shell_session(monkeypatch, cli_shell, session):
+    def fake_ensure_sandbox_session(session_id=None, tool_id=None):
+        return session
+
+    monkeypatch.setattr(
+        cli_shell,
+        "ensure_sandbox_session",
+        fake_ensure_sandbox_session,
+    )
+
+
+def test_ensure_sandbox_session_uses_env_defaults(monkeypatch, tmp_path) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     monkeypatch.setenv("AGENTKIT_SANDBOX_TOOL_ID", "tool-env")
     monkeypatch.setenv("AGENTKIT_SANDBOX_TTL", "60")
     monkeypatch.setattr(
-        sandbox_create,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
     store_path = _patch_store_path(monkeypatch, tmp_path)
 
-    result = runner.invoke(app, ["sandbox", "create"])
+    result = session_create.ensure_sandbox_session()
 
-    assert result.exit_code == 0
-    create_result = {
-        "user_session_id": "user-session-from-api",
+    assert result == {
+        "session_id": "user-session-from-api",
         "tool_id": "tool-env",
-        "session_id": "session-from-api",
+        "instance_id": "session-from-api",
         "endpoint": "https://sandbox.example.com",
     }
-    assert json.loads(result.output) == create_result
     assert json.loads(store_path.read_text(encoding="utf-8")) == {
-        "user-session-from-api": create_result
+        "user-session-from-api": result
     }
 
     request = _FakeToolsClient.last_request
@@ -109,58 +128,53 @@ def test_sandbox_create_uses_env_defaults(monkeypatch, tmp_path) -> None:
     assert request.user_session_id
 
 
-def test_sandbox_create_cli_options_override_env(monkeypatch, tmp_path) -> None:
-    from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_create as sandbox_create
+def test_ensure_sandbox_session_options_override_env(monkeypatch, tmp_path) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     monkeypatch.setenv("AGENTKIT_SANDBOX_TOOL_ID", "tool-env")
     monkeypatch.setenv("AGENTKIT_SANDBOX_TTL", "60")
     monkeypatch.setattr(
-        sandbox_create,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
     _patch_store_path(monkeypatch, tmp_path)
 
-    result = runner.invoke(
-        app,
-        [
-            "sandbox",
-            "create",
-            "--tool-id",
-            "tool-cli",
-            "--ttl",
-            "120",
-            "--user-session-id",
-            "user-cli",
-        ],
+    session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+        ttl=120,
     )
 
-    assert result.exit_code == 0
     request = _FakeToolsClient.last_request
     assert request.tool_id == "tool-cli"
     assert request.ttl == 120
     assert request.user_session_id == "user-cli"
 
 
-def test_sandbox_create_requires_tool_id(monkeypatch, tmp_path) -> None:
+def test_session_create_command_is_removed() -> None:
     from agentkit.toolkit.cli.cli import app
 
-    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
-    _patch_store_path(monkeypatch, tmp_path)
+    result = runner.invoke(app, ["create"])
 
-    result = runner.invoke(app, ["sandbox", "create"])
-
-    assert result.exit_code == 1
-    assert "--tool-id or AGENTKIT_SANDBOX_TOOL_ID is required" in result.output
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
-def test_sandbox_create_reuses_existing_remote_session(
+def test_sandbox_command_group_is_removed() -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    result = runner.invoke(app, ["sandbox"])
+
+    assert result.exit_code != 0
+    assert "No such command" in result.output
+
+
+def test_ensure_sandbox_session_reuses_existing_remote_session(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_create as sandbox_create
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     class ExistingResponse:
         user_session_id = "same-user-session"
@@ -168,18 +182,19 @@ def test_sandbox_create_reuses_existing_remote_session(
         endpoint = "https://remote.example.com"
 
     monkeypatch.setattr(
-        sandbox_create,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
     store_path = _patch_store_path(monkeypatch, tmp_path)
     store_path.write_text(
         json.dumps(
             {
                 "same-user-session": {
-                    "user_session_id": "same-user-session",
+                    "session_id": "same-user-session",
                     "tool_id": "tool-stored",
-                    "session_id": "session-existing",
+                    "instance_id": "session-existing",
                     "endpoint": "https://local.example.com",
                 }
             }
@@ -188,38 +203,30 @@ def test_sandbox_create_reuses_existing_remote_session(
     )
     _FakeToolsClient.get_response = ExistingResponse()
 
-    result = runner.invoke(
-        app,
-        [
-            "sandbox",
-            "create",
-            "--user-session-id",
-            "same-user-session",
-        ],
+    result = session_create.ensure_sandbox_session(
+        session_id="same-user-session",
     )
 
-    assert result.exit_code == 0
     assert _FakeToolsClient.create_call_count == 0
     assert _FakeToolsClient.get_call_count == 1
     assert _FakeToolsClient.last_get_request.tool_id == "tool-stored"
     assert _FakeToolsClient.last_get_request.session_id == "session-existing"
-    assert json.loads(result.output) == {
-        "user_session_id": "same-user-session",
+    assert result == {
+        "session_id": "same-user-session",
         "tool_id": "tool-stored",
-        "session_id": "session-existing",
+        "instance_id": "session-existing",
         "endpoint": "https://remote.example.com",
     }
 
     stored = json.loads(store_path.read_text(encoding="utf-8"))
-    assert stored["same-user-session"] == json.loads(result.output)
+    assert stored["same-user-session"] == result
 
 
-def test_sandbox_create_recreates_when_remote_session_missing(
+def test_ensure_sandbox_session_recreates_when_remote_session_missing(
     monkeypatch,
     tmp_path,
 ) -> None:
-    from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_create as sandbox_create
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     class NewResponse:
         user_session_id = "same-user-session"
@@ -227,7 +234,7 @@ def test_sandbox_create_recreates_when_remote_session_missing(
         endpoint = "https://new.example.com"
 
     monkeypatch.setattr(
-        sandbox_create,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
@@ -236,9 +243,9 @@ def test_sandbox_create_recreates_when_remote_session_missing(
         json.dumps(
             {
                 "same-user-session": {
-                    "user_session_id": "same-user-session",
+                    "session_id": "same-user-session",
                     "tool_id": "tool-stored",
-                    "session_id": "session-old",
+                    "instance_id": "session-old",
                     "endpoint": "https://old.example.com",
                 }
             }
@@ -248,43 +255,36 @@ def test_sandbox_create_recreates_when_remote_session_missing(
     _FakeToolsClient.get_error = Exception("Session not found")
     _FakeToolsClient.response = NewResponse()
 
-    result = runner.invoke(
-        app,
-        [
-            "sandbox",
-            "create",
-            "--tool-id",
-            "tool-new",
-            "--user-session-id",
-            "same-user-session",
-        ],
+    result = session_create.ensure_sandbox_session(
+        session_id="same-user-session",
+        tool_id="tool-new",
     )
 
-    assert result.exit_code == 0
     assert _FakeToolsClient.get_call_count == 1
     assert _FakeToolsClient.create_call_count == 1
-    assert _FakeToolsClient.last_get_request.tool_id == "tool-stored"
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-new"
     assert _FakeToolsClient.last_get_request.session_id == "session-old"
     assert _FakeToolsClient.last_request.tool_id == "tool-new"
 
     stored = json.loads(store_path.read_text(encoding="utf-8"))
     assert list(stored) == ["same-user-session"]
     assert stored["same-user-session"] == {
-        "user_session_id": "same-user-session",
+        "session_id": "same-user-session",
         "tool_id": "tool-new",
-        "session_id": "session-new",
+        "instance_id": "session-new",
         "endpoint": "https://new.example.com",
     }
+    assert result == stored["same-user-session"]
 
 
-def test_sandbox_get_returns_stored_session(monkeypatch, tmp_path) -> None:
+def test_cli_get_returns_stored_session(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     stored_result = {
-        "user_session_id": "user-1",
+        "session_id": "user-1",
         "tool_id": "tool-1",
-        "session_id": "session-1",
+        "instance_id": "session-1",
         "endpoint": "https://sandbox.example.com",
     }
     store_path.write_text(
@@ -294,23 +294,23 @@ def test_sandbox_get_returns_stored_session(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["sandbox", "get", "--user-session-id", "user-1"],
+        ["get", "--session-id", "user-1"],
     )
 
     assert result.exit_code == 0
     assert json.loads(result.output) == stored_result
 
 
-def test_sandbox_get_requires_user_session_id() -> None:
+def test_cli_get_requires_session_id() -> None:
     from agentkit.toolkit.cli.cli import app
 
-    result = runner.invoke(app, ["sandbox", "get"])
+    result = runner.invoke(app, ["get"])
 
     assert result.exit_code != 0
-    assert "--user-session-id" in result.output
+    assert "--session-id" in result.output
 
 
-def test_sandbox_get_reports_missing_session(monkeypatch, tmp_path) -> None:
+def test_cli_get_reports_missing_session(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
@@ -318,31 +318,29 @@ def test_sandbox_get_reports_missing_session(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["sandbox", "get", "--user-session-id", "missing-user"],
+        ["get", "--session-id", "missing-user"],
     )
 
     assert result.exit_code == 1
     assert "Sandbox session not found: missing-user" in result.output
 
 
-def test_sandbox_exec_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
+def test_cli_shell_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_exec as sandbox_exec
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
     store_path.write_text(
-        json.dumps(
-            {
-                "user-1": {
-                    "user_session_id": "user-1",
-                    "tool_id": "tool-1",
-                    "session_id": "session-1",
-                    "endpoint": "https://sandbox.example.com/?token=abc",
-                }
-            }
-        ),
+        json.dumps({"user-1": stored_session}),
         encoding="utf-8",
     )
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
 
     captured = {}
 
@@ -369,14 +367,13 @@ def test_sandbox_exec_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
         captured["timeout"] = timeout
         return FakeResponse()
 
-    monkeypatch.setattr(sandbox_exec.requests, "post", fake_post)
+    monkeypatch.setattr(cli_shell.requests, "post", fake_post)
 
     result = runner.invoke(
         app,
         [
-            "sandbox",
-            "exec",
-            "--user-session-id",
+            "shell",
+            "--session-id",
             "user-1",
             "--command",
             "echo 123",
@@ -400,36 +397,99 @@ def test_sandbox_exec_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
     assert "session_id" not in payload["data"]
 
 
-def test_sandbox_exec_requires_command() -> None:
+def test_cli_shell_requires_command() -> None:
     from agentkit.toolkit.cli.cli import app
 
     result = runner.invoke(
         app,
-        ["sandbox", "exec", "--user-session-id", "user-1"],
+        ["shell", "--session-id", "user-1"],
     )
 
     assert result.exit_code != 0
     assert "--command" in result.output
 
 
-def test_sandbox_terminal_connects_to_ws_endpoint(monkeypatch, tmp_path) -> None:
+def test_cli_shell_creates_session_when_session_id_omitted(
+    monkeypatch,
+    tmp_path,
+) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
-    store_path.write_text(
-        json.dumps(
-            {
-                "user-1": {
-                    "user_session_id": "user-1",
-                    "tool_id": "tool-1",
-                    "session_id": "session-1",
-                    "endpoint": "https://sandbox.example.com/?token=abc",
-                }
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    captured = {}
+
+    class FakeResponse:
+        text = '{"success": true}'
+
+        def json(self):
+            return {
+                "success": True,
+                "message": "Command executed",
+                "data": {
+                    "session_id": "shell-1",
+                    "command": "echo 123",
+                    "status": "completed",
+                    "output": "123",
+                    "exit_code": 0,
+                },
+                "hint": None,
             }
-        ),
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return FakeResponse()
+
+    monkeypatch.setattr(cli_shell.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "shell",
+            "--tool-id",
+            "tool-cli",
+            "--command",
+            "echo 123",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.get_call_count == 0
+    assert _FakeToolsClient.last_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_request.user_session_id
+    assert captured["url"] == "https://sandbox.example.com/v1/shell/exec"
+
+    payload = json.loads(result.output)
+    assert payload["data"]["shell_id"] == "shell-1"
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert stored["user-session-from-api"]["tool_id"] == "tool-cli"
+
+
+def test_cli_exec_connects_to_ws_endpoint(monkeypatch, tmp_path) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
     captured = {}
 
     def fake_connect(ws_url, initial_command, on_shell_id=None):
@@ -437,11 +497,11 @@ def test_sandbox_terminal_connects_to_ws_endpoint(monkeypatch, tmp_path) -> None
         captured["initial_command"] = initial_command
         captured["on_shell_id"] = on_shell_id
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
-        ["sandbox", "terminal", "--user-session-id", "user-1"],
+        ["exec", "--session-id", "user-1"],
     )
 
     assert result.exit_code == 0
@@ -450,38 +510,35 @@ def test_sandbox_terminal_connects_to_ws_endpoint(monkeypatch, tmp_path) -> None
     assert captured["on_shell_id"] is not None
 
 
-def test_sandbox_terminal_runs_command_option(monkeypatch, tmp_path) -> None:
+def test_cli_exec_runs_command_option(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
     store_path.write_text(
-        json.dumps(
-            {
-                "user-1": {
-                    "user_session_id": "user-1",
-                    "tool_id": "tool-1",
-                    "session_id": "session-1",
-                    "endpoint": "https://sandbox.example.com/?token=abc",
-                }
-            }
-        ),
+        json.dumps({"user-1": stored_session}),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
     captured = {}
 
     def fake_connect(ws_url, initial_command, on_shell_id=None):
         captured["ws_url"] = ws_url
         captured["initial_command"] = initial_command
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
         [
-            "sandbox",
-            "terminal",
-            "--user-session-id",
+            "exec",
+            "--session-id",
             "user-1",
             "--command",
             "codex",
@@ -493,41 +550,38 @@ def test_sandbox_terminal_runs_command_option(monkeypatch, tmp_path) -> None:
     assert captured["initial_command"] == "codex"
 
 
-def test_sandbox_terminal_supports_shell_id_and_empty_command(
+def test_cli_exec_supports_shell_id_and_empty_command(
     monkeypatch,
     tmp_path,
 ) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "http://sandbox.example.com/base?token=abc",
+    }
     store_path.write_text(
-        json.dumps(
-            {
-                "user-1": {
-                    "user_session_id": "user-1",
-                    "tool_id": "tool-1",
-                    "session_id": "session-1",
-                    "endpoint": "http://sandbox.example.com/base?token=abc",
-                }
-            }
-        ),
+        json.dumps({"user-1": stored_session}),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
     captured = {}
 
     def fake_connect(ws_url, initial_command, on_shell_id=None):
         captured["ws_url"] = ws_url
         captured["initial_command"] = initial_command
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
         [
-            "sandbox",
-            "terminal",
-            "--user-session-id",
+            "exec",
+            "--session-id",
             "user-1",
             "--shell-id",
             "shell-1",
@@ -544,41 +598,38 @@ def test_sandbox_terminal_supports_shell_id_and_empty_command(
     assert captured["initial_command"] == ""
 
 
-def test_sandbox_terminal_does_not_restart_codex_for_shell_id(
+def test_cli_exec_does_not_restart_codex_for_shell_id(
     monkeypatch,
     tmp_path,
 ) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
     store_path.write_text(
-        json.dumps(
-            {
-                "user-1": {
-                    "user_session_id": "user-1",
-                    "tool_id": "tool-1",
-                    "session_id": "session-1",
-                    "endpoint": "https://sandbox.example.com/?token=abc",
-                }
-            }
-        ),
+        json.dumps({"user-1": stored_session}),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
     captured = {}
 
     def fake_connect(ws_url, initial_command, on_shell_id=None):
         captured["ws_url"] = ws_url
         captured["initial_command"] = initial_command
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
         [
-            "sandbox",
-            "terminal",
-            "--user-session-id",
+            "exec",
+            "--session-id",
             "user-1",
             "--shell-id",
             "shell-1",
@@ -589,24 +640,25 @@ def test_sandbox_terminal_does_not_restart_codex_for_shell_id(
     assert captured["initial_command"] is None
 
 
-def test_sandbox_terminal_clears_remote_shell_id_on_disconnect(
+def test_cli_exec_clears_remote_shell_id_on_disconnect(
     monkeypatch,
     tmp_path,
 ) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     stored_session = {
-        "user_session_id": "user-1",
+        "session_id": "user-1",
         "tool_id": "tool-1",
-        "session_id": "session-1",
+        "instance_id": "session-1",
         "endpoint": "https://sandbox.example.com/?token=abc",
     }
     store_path.write_text(
         json.dumps({"user-1": stored_session}, indent=2),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
 
     def fake_connect(_ws_url, initial_command=None, on_shell_id=None):
         assert on_shell_id is not None
@@ -614,11 +666,11 @@ def test_sandbox_terminal_clears_remote_shell_id_on_disconnect(
         stored = json.loads(store_path.read_text(encoding="utf-8"))
         assert stored["user-1"]["terminal_shell_id"] == "shell-from-ws"
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
-        ["sandbox", "terminal", "--user-session-id", "user-1"],
+        ["exec", "--session-id", "user-1"],
     )
 
     assert result.exit_code == 0
@@ -627,24 +679,25 @@ def test_sandbox_terminal_clears_remote_shell_id_on_disconnect(
     assert "Shell ID: shell-from-ws" in result.output
 
 
-def test_sandbox_terminal_does_not_clear_newer_shell_id(
+def test_cli_exec_does_not_clear_newer_shell_id(
     monkeypatch,
     tmp_path,
 ) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     stored_session = {
-        "user_session_id": "user-1",
+        "session_id": "user-1",
         "tool_id": "tool-1",
-        "session_id": "session-1",
+        "instance_id": "session-1",
         "endpoint": "https://sandbox.example.com/?token=abc",
     }
     store_path.write_text(
         json.dumps({"user-1": stored_session}, indent=2),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
 
     def fake_connect(_ws_url, initial_command=None, on_shell_id=None):
         assert on_shell_id is not None
@@ -653,11 +706,11 @@ def test_sandbox_terminal_does_not_clear_newer_shell_id(
         stored["user-1"]["terminal_shell_id"] = "shell-from-newer-terminal"
         store_path.write_text(json.dumps(stored), encoding="utf-8")
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
-        ["sandbox", "terminal", "--user-session-id", "user-1"],
+        ["exec", "--session-id", "user-1"],
     )
 
     assert result.exit_code == 0
@@ -665,18 +718,18 @@ def test_sandbox_terminal_does_not_clear_newer_shell_id(
     assert stored["user-1"]["terminal_shell_id"] == "shell-from-newer-terminal"
 
 
-def test_sandbox_terminal_clears_shell_id_option_on_disconnect(
+def test_cli_exec_clears_shell_id_option_on_disconnect(
     monkeypatch,
     tmp_path,
 ) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     stored_session = {
-        "user_session_id": "user-1",
+        "session_id": "user-1",
         "tool_id": "tool-1",
-        "session_id": "session-1",
+        "instance_id": "session-1",
         "endpoint": "https://sandbox.example.com/?token=abc",
         "terminal_shell_id": "shell-from-cli",
     }
@@ -684,18 +737,18 @@ def test_sandbox_terminal_clears_shell_id_option_on_disconnect(
         json.dumps({"user-1": stored_session}, indent=2),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
 
     def fake_connect(_ws_url, initial_command=None, on_shell_id=None):
         assert on_shell_id is not None
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
         [
-            "sandbox",
-            "terminal",
-            "--user-session-id",
+            "exec",
+            "--session-id",
             "user-1",
             "--shell-id",
             "shell-from-cli",
@@ -707,18 +760,18 @@ def test_sandbox_terminal_clears_shell_id_option_on_disconnect(
     assert "terminal_shell_id" not in stored["user-1"]
 
 
-def test_sandbox_terminal_clears_stored_shell_id_on_disconnect(
+def test_cli_exec_clears_stored_shell_id_on_disconnect(
     monkeypatch,
     tmp_path,
 ) -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     stored_session = {
-        "user_session_id": "user-1",
+        "session_id": "user-1",
         "tool_id": "tool-1",
-        "session_id": "session-1",
+        "instance_id": "session-1",
         "endpoint": "https://sandbox.example.com/?token=abc",
         "terminal_shell_id": "shell-from-store",
     }
@@ -726,15 +779,16 @@ def test_sandbox_terminal_clears_stored_shell_id_on_disconnect(
         json.dumps({"user-1": stored_session}, indent=2),
         encoding="utf-8",
     )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
 
     def fake_connect(_ws_url, initial_command=None, on_shell_id=None):
         assert on_shell_id is not None
 
-    monkeypatch.setattr(sandbox_terminal, "_connect_terminal", fake_connect)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
-        ["sandbox", "terminal", "--user-session-id", "user-1"],
+        ["exec", "--session-id", "user-1"],
     )
 
     assert result.exit_code == 0
@@ -742,19 +796,66 @@ def test_sandbox_terminal_clears_stored_shell_id_on_disconnect(
     assert "terminal_shell_id" not in stored["user-1"]
 
 
-def test_sandbox_terminal_requires_user_session_id() -> None:
+def test_cli_exec_creates_session_when_session_id_omitted(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    captured = {}
+
+    def fake_connect(ws_url, initial_command, on_shell_id=None):
+        captured["ws_url"] = ws_url
+        captured["initial_command"] = initial_command
+        captured["on_shell_id"] = on_shell_id
+
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
+
+    result = runner.invoke(
+        app,
+        ["exec", "--tool-id", "tool-cli"],
+    )
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.get_call_count == 0
+    assert _FakeToolsClient.last_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_request.user_session_id
+    assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws"
+    assert captured["initial_command"] is None
+    assert captured["on_shell_id"] is not None
+
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert stored["user-session-from-api"]["tool_id"] == "tool-cli"
+
+
+def test_cli_exec_requires_tool_id_for_new_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
     from agentkit.toolkit.cli.cli import app
 
-    result = runner.invoke(app, ["sandbox", "terminal"])
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    _patch_store_path(monkeypatch, tmp_path)
 
-    assert result.exit_code != 0
-    assert "--user-session-id" in result.output
+    result = runner.invoke(app, ["exec"])
+
+    assert result.exit_code == 1
+    assert "--tool-id or AGENTKIT_SANDBOX_TOOL_ID is required" in result.output
 
 
-def test_sandbox_terminal_detach_sequence_closes_websocket(monkeypatch) -> None:
+def test_cli_exec_detach_sequence_closes_websocket(monkeypatch) -> None:
     import json as json_module
     import threading
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     class FakeStdin:
         def fileno(self):
@@ -774,15 +875,15 @@ def test_sandbox_terminal_detach_sequence_closes_websocket(monkeypatch) -> None:
     ws = FakeWs()
     stop_event = threading.Event()
 
-    monkeypatch.setattr(sandbox_terminal.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(cli_exec.sys, "stdin", FakeStdin())
     monkeypatch.setattr(
-        sandbox_terminal.select,
+        cli_exec.select,
         "select",
         lambda _r, _w, _x, _timeout: ([0], [], []),
     )
-    monkeypatch.setattr(sandbox_terminal.os, "read", lambda _fd, _size: b"pwd\x1d")
+    monkeypatch.setattr(cli_exec.os, "read", lambda _fd, _size: b"pwd\x1d")
 
-    sandbox_terminal._stream_stdin(ws, stop_event)
+    cli_exec._stream_stdin(ws, stop_event)
 
     assert ws.messages == [{"type": "input", "data": "pwd"}]
     assert ws.closed is True
@@ -790,12 +891,12 @@ def test_sandbox_terminal_detach_sequence_closes_websocket(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize("exit_command", [b"exit\n", b"exit()\n"])
-def test_sandbox_terminal_exit_command_closes_websocket(
+def test_cli_exec_exit_command_closes_websocket(
     monkeypatch,
     exit_command,
 ) -> None:
     import threading
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     class FakeStdin:
         def fileno(self):
@@ -815,15 +916,15 @@ def test_sandbox_terminal_exit_command_closes_websocket(
     ws = FakeWs()
     stop_event = threading.Event()
 
-    monkeypatch.setattr(sandbox_terminal.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(cli_exec.sys, "stdin", FakeStdin())
     monkeypatch.setattr(
-        sandbox_terminal.select,
+        cli_exec.select,
         "select",
         lambda _r, _w, _x, _timeout: ([0], [], []),
     )
-    monkeypatch.setattr(sandbox_terminal.os, "read", lambda _fd, _size: exit_command)
+    monkeypatch.setattr(cli_exec.os, "read", lambda _fd, _size: exit_command)
 
-    sandbox_terminal._stream_stdin(ws, stop_event)
+    cli_exec._stream_stdin(ws, stop_event)
 
     assert ws.messages == []
     assert ws.closed is True
@@ -831,12 +932,12 @@ def test_sandbox_terminal_exit_command_closes_websocket(
 
 
 @pytest.mark.parametrize("exit_command", [b"previous input exit\r", b"x exit()\r"])
-def test_sandbox_terminal_exit_command_allows_prefix_buffer(
+def test_cli_exec_exit_command_allows_prefix_buffer(
     monkeypatch,
     exit_command,
 ) -> None:
     import threading
-    import agentkit.toolkit.cli.sandbox.sandbox_terminal as sandbox_terminal
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
 
     class FakeStdin:
         def fileno(self):
@@ -855,15 +956,15 @@ def test_sandbox_terminal_exit_command_allows_prefix_buffer(
     ws = FakeWs()
     stop_event = threading.Event()
 
-    monkeypatch.setattr(sandbox_terminal.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(cli_exec.sys, "stdin", FakeStdin())
     monkeypatch.setattr(
-        sandbox_terminal.select,
+        cli_exec.select,
         "select",
         lambda _r, _w, _x, _timeout: ([0], [], []),
     )
-    monkeypatch.setattr(sandbox_terminal.os, "read", lambda _fd, _size: exit_command)
+    monkeypatch.setattr(cli_exec.os, "read", lambda _fd, _size: exit_command)
 
-    sandbox_terminal._stream_stdin(ws, stop_event)
+    cli_exec._stream_stdin(ws, stop_event)
 
     assert ws.closed is True
     assert stop_event.is_set()

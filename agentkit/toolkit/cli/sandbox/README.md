@@ -1,7 +1,7 @@
-# AgentKit Sandbox CLI
+# AgentKit Sandbox Commands
 
-The sandbox CLI provides helper commands for creating and reusing AgentKit tool
-sandbox sessions.
+The AgentKit CLI provides top-level helper commands for creating and reusing
+AgentKit tool sandbox sessions.
 
 ## Install From Current Branch
 
@@ -30,72 +30,42 @@ python3 -m pip install -e .
 Verify that the CLI is available from the current branch:
 
 ```bash
-agentkit sandbox --help
+agentkit --help
 python3 -m pip show agentkit-sdk-python
 ```
 
 ## Commands
-
-### Create
-
-Create a sandbox session through `CreateSession` and persist the result locally.
-When `--user-session-id` is provided, the command is idempotent: it first checks
-`.agentkit/sandbox/sessions.json`; if a local record exists, it calls
-`GetSession` with the stored `session_id` to verify the remote session. Existing
-remote sessions are returned and refreshed in the local store. Missing remote
-sessions are recreated through `CreateSession`.
-
-```bash
-agentkit sandbox create \
-  --user-session-id 123456789 \
-  --ttl 28800 \
-  --tool-id t-example
-```
-
-Options:
-
-- `--user-session-id`: optional. Defaults to a generated UUID.
-- `--ttl`: optional. Defaults to `AGENTKIT_SANDBOX_TTL`, then `28800`.
-- `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
-  set, the command fails.
-
-Output:
-
-```json
-{
-  "user_session_id": "123456789",
-  "tool_id": "t-example",
-  "session_id": "s-example",
-  "endpoint": "https://example.com/?Authorization=..."
-}
-```
 
 ### Get
 
 Read a created sandbox session from the local session store.
 
 ```bash
-agentkit sandbox get --user-session-id 123456789
+agentkit get --session-id 123456789
 ```
 
 Options:
 
-- `--user-session-id`: required. User session ID to look up.
+- `--session-id`: required. Sandbox session ID to look up.
 
-### Exec
+### Shell
 
 Execute a command in a sandbox shell.
 
 ```bash
-agentkit sandbox exec \
-  --user-session-id 123456789 \
+agentkit shell \
+  --session-id 123456789 \
   --command 'echo $TEST_VAR' \
   --shell-id shell-example
 ```
 
 Options:
 
-- `--user-session-id`: required. Used to look up the stored endpoint.
+- `--session-id`: optional. Sandbox session ID used as the local session key.
+  If omitted, a UUID is generated and the command creates a sandbox session
+  through the same idempotent session ensure flow as `exec`.
+- `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If no existing
+  local session can be reused and neither value is set, the command fails.
 - `--command`: required. Command to execute in the sandbox.
 - `--exec-dir`: optional execution directory.
 - `--shell-id`: optional shell terminal ID for re-entering an existing shell.
@@ -113,19 +83,23 @@ The command posts to `<endpoint>/v1/shell/exec` with:
 The response is returned as JSON. If the service returns `data.session_id`, the
 CLI renames it to `data.shell_id`.
 
-### Terminal
+### Exec
 
-Open a streaming WebSocket terminal to the sandbox. By default, this connects
+Open a streaming WebSocket exec session to the sandbox. By default, this connects
 without running an initial command.
 
 ```bash
-agentkit sandbox terminal --user-session-id 123456789
+agentkit exec --session-id 123456789
 ```
 
 Options:
 
-- `--user-session-id`: required. Used to look up the stored endpoint.
-- `--command`: optional. Initial command to run after the terminal is ready.
+- `--session-id`: optional. Sandbox session ID used as the local
+  session key. If omitted, a UUID is generated and the command creates a
+  sandbox session through the same idempotent session ensure flow.
+- `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If no existing
+  local session can be reused and neither value is set, the command fails.
+- `--command`: optional. Initial command to run after the exec session is ready.
   Omit this option to connect without running an initial command. Use
   `--command codex` to start the remote Codex TUI.
 - `--shell-id`: optional. Existing shell terminal ID to connect to. When this is
@@ -146,32 +120,34 @@ Codex or shell commands without closing the local WebSocket client.
 
 ## Local Store
 
-`agentkit sandbox create` writes session results to:
+`agentkit exec` writes session results to:
 
 ```text
 .agentkit/sandbox/sessions.json
 ```
 
-The file is a JSON object keyed by `user_session_id`:
+The file is a JSON object keyed by `session_id`:
 
 ```json
 {
   "123456789": {
-    "user_session_id": "123456789",
+    "session_id": "123456789",
     "tool_id": "t-example",
-    "session_id": "s-example",
+    "instance_id": "s-example",
     "endpoint": "https://example.com/?Authorization=..."
   }
 }
 ```
 
-Repeated creates with the same `user_session_id` overwrite the previous entry.
+Repeated exec opens with the same `session_id` refresh the previous
+entry when the remote session is reachable, or overwrite it after recreating the
+remote session.
 
 ## Module Layout
 
-- `cli.py`: registers the sandbox Typer app and subcommands.
-- `sandbox_create.py`: create command implementation.
-- `sandbox_get.py`: get command implementation.
-- `sandbox_exec.py`: exec command implementation.
-- `sandbox_terminal.py`: streaming terminal command implementation.
+- `../cli.py`: registers `get`, `exec`, and `shell` as top-level commands.
+- `session_create.py`: shared session creation and idempotent ensure helpers.
+- `cli_get.py`: get command implementation.
+- `cli_shell.py`: shell command implementation.
+- `cli_exec.py`: streaming exec command implementation.
 - `utils.py`: shared store, URL, JSON, and error helpers.

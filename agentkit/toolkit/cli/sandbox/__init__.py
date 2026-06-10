@@ -12,8 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Sandbox CLI commands."""
+"""Sandbox CLI command implementations."""
 
-from agentkit.toolkit.cli.sandbox.cli import sandbox_app
+from agentkit.toolkit.cli.sandbox.cli_exec import exec_command
+from agentkit.toolkit.cli.sandbox.cli_get import get_command
+from agentkit.toolkit.cli.sandbox.cli_shell import shell_command
 
-__all__ = ["sandbox_app"]
+__all__ = ["exec_command", "get_command", "shell_command"]

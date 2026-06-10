@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Interactive terminal command for sandbox CLI."""
+"""Interactive exec command for sandbox CLI."""
 
 from __future__ import annotations
 
@@ -30,10 +30,13 @@ from typing import Iterator, Optional
 
 import typer
 
+from agentkit.toolkit.cli.sandbox.session_create import (
+    SANDBOX_TOOL_ID_ENV,
+    ensure_sandbox_session,
+)
 from agentkit.toolkit.cli.sandbox.utils import (
     build_terminal_ws_url,
     error,
-    get_session_result,
     remove_session_result_key,
     update_session_result,
 )
@@ -227,17 +230,25 @@ def _connect_terminal(
             signal.signal(sigwinch, previous_sigwinch)
 
 
-def terminal_command(
-    user_session_id: str = typer.Option(
-        ...,
-        "--user-session-id",
-        help="User session ID to connect to.",
+def exec_command(
+    session_id: Optional[str] = typer.Option(
+        None,
+        "--session-id",
+        help=(
+            "Sandbox session ID. Defaults to a generated UUID and creates "
+            "a sandbox session when needed."
+        ),
+    ),
+    tool_id: Optional[str] = typer.Option(
+        None,
+        "--tool-id",
+        help=f"Sandbox tool ID. Defaults to {SANDBOX_TOOL_ID_ENV}.",
     ),
     command: Optional[str] = typer.Option(
         None,
         "--command",
         help=(
-            "Initial command to run after the terminal is ready. "
+            "Initial command to run after the exec session is ready. "
             "Omit this option to connect without an initial command."
         ),
     ),
@@ -247,8 +258,21 @@ def terminal_command(
         help="Existing shell terminal ID to connect to.",
     ),
 ) -> None:
-    """Open a streaming sandbox terminal. Press Ctrl-] or type exit/exit()."""
-    session = get_session_result(user_session_id)
+    """Open a streaming sandbox exec session. Press Ctrl-] or type exit/exit()."""
+    try:
+        session = ensure_sandbox_session(
+            session_id=session_id,
+            tool_id=tool_id,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
+
+    session_id = session.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        error("Sandbox session missing session_id")
+
     ws_url = build_terminal_ws_url(session.get("endpoint"), shell_id=shell_id)
     initial_command = command
 
@@ -260,7 +284,7 @@ def terminal_command(
     def on_shell_id(remote_shell_id: str) -> None:
         current_shell_id["value"] = remote_shell_id
         update_session_result(
-            user_session_id,
+            session_id,
             {"terminal_shell_id": remote_shell_id},
         )
         typer.echo(f"Shell ID: {remote_shell_id}", err=True)
@@ -275,7 +299,7 @@ def terminal_command(
         cleanup_shell_id = current_shell_id["value"] or shell_id or stored_shell_id
         if cleanup_shell_id:
             remove_session_result_key(
-                user_session_id,
+                session_id,
                 "terminal_shell_id",
                 expected_value=cleanup_shell_id,
             )

@@ -58,9 +58,9 @@ def load_session_store(path: Path) -> dict[str, object]:
 
 
 def save_session_result(result: dict[str, object]) -> None:
-    user_session_id = result.get("user_session_id")
-    if not isinstance(user_session_id, str) or not user_session_id:
-        error("CreateSession response missing user_session_id")
+    session_id = result.get("session_id")
+    if not isinstance(session_id, str) or not session_id:
+        error("CreateSession response missing session_id")
 
     path = _get_session_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,7 +70,7 @@ def save_session_result(result: dict[str, object]) -> None:
     else:
         data = {}
 
-    data[user_session_id] = result
+    data[session_id] = result
     path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -78,20 +78,20 @@ def save_session_result(result: dict[str, object]) -> None:
 
 
 def update_session_result(
-    user_session_id: str,
+    session_id: str,
     updates: dict[str, object],
 ) -> dict[str, object]:
     path = _get_session_store_path()
     data = load_session_store(path)
 
-    result = data.get(user_session_id)
+    result = data.get(session_id)
     if result is None:
-        error(f"Sandbox session not found: {user_session_id}")
+        error(f"Sandbox session not found: {session_id}")
     if not isinstance(result, dict):
-        error(f"Invalid sandbox session record: {user_session_id}")
+        error(f"Invalid sandbox session record: {session_id}")
 
     result.update(updates)
-    data[user_session_id] = result
+    data[session_id] = result
     path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -100,18 +100,18 @@ def update_session_result(
 
 
 def remove_session_result_key(
-    user_session_id: str,
+    session_id: str,
     key: str,
     expected_value: object | None = None,
 ) -> dict[str, object]:
     path = _get_session_store_path()
     data = load_session_store(path)
 
-    result = data.get(user_session_id)
+    result = data.get(session_id)
     if result is None:
-        error(f"Sandbox session not found: {user_session_id}")
+        error(f"Sandbox session not found: {session_id}")
     if not isinstance(result, dict):
-        error(f"Invalid sandbox session record: {user_session_id}")
+        error(f"Invalid sandbox session record: {session_id}")
 
     if expected_value is not None and result.get(key) != expected_value:
         return result
@@ -119,7 +119,7 @@ def remove_session_result_key(
         return result
 
     result.pop(key)
-    data[user_session_id] = result
+    data[session_id] = result
     path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
@@ -127,30 +127,30 @@ def remove_session_result_key(
     return result
 
 
-def get_session_result(user_session_id: str) -> dict[str, object]:
+def get_session_result(session_id: str) -> dict[str, object]:
     path = _get_session_store_path()
     data = load_session_store(path)
 
-    result = data.get(user_session_id)
+    result = data.get(session_id)
     if result is None:
-        error(f"Sandbox session not found: {user_session_id}")
+        error(f"Sandbox session not found: {session_id}")
     if not isinstance(result, dict):
-        error(f"Invalid sandbox session record: {user_session_id}")
+        error(f"Invalid sandbox session record: {session_id}")
 
     return result
 
 
-def find_session_result(user_session_id: str) -> dict[str, object] | None:
+def find_session_result(session_id: str) -> dict[str, object] | None:
     path = _get_session_store_path()
     if not path.exists():
         return None
 
     data = load_session_store(path)
-    result = data.get(user_session_id)
+    result = data.get(session_id)
     if result is None:
         return None
     if not isinstance(result, dict):
-        error(f"Invalid sandbox session record: {user_session_id}")
+        error(f"Invalid sandbox session record: {session_id}")
 
     return result
 

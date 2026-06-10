@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Exec command for sandbox CLI."""
+"""Shell command for sandbox CLI."""
 
 from __future__ import annotations
 
@@ -21,21 +21,32 @@ from typing import Optional
 import requests
 import typer
 
+from agentkit.toolkit.cli.sandbox.session_create import (
+    SANDBOX_TOOL_ID_ENV,
+    ensure_sandbox_session,
+)
 from agentkit.toolkit.cli.sandbox.utils import (
     SANDBOX_EXEC_TIMEOUT_SECONDS,
     build_exec_url,
     echo_json,
     error,
-    get_session_result,
     rename_exec_session_id,
 )
 
 
-def exec_command(
-    user_session_id: str = typer.Option(
-        ...,
-        "--user-session-id",
-        help="User session ID to execute against.",
+def shell_command(
+    session_id: Optional[str] = typer.Option(
+        None,
+        "--session-id",
+        help=(
+            "Sandbox session ID. Defaults to a generated UUID and creates "
+            "a sandbox session when needed."
+        ),
+    ),
+    tool_id: Optional[str] = typer.Option(
+        None,
+        "--tool-id",
+        help=f"Sandbox tool ID. Defaults to {SANDBOX_TOOL_ID_ENV}.",
     ),
     command: str = typer.Option(
         ...,
@@ -54,7 +65,16 @@ def exec_command(
     ),
 ) -> None:
     """Execute a command in a sandbox shell."""
-    session = get_session_result(user_session_id)
+    try:
+        session = ensure_sandbox_session(
+            session_id=session_id,
+            tool_id=tool_id,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
+
     url = build_exec_url(session.get("endpoint"))
     body = {
         "id": shell_id or "",

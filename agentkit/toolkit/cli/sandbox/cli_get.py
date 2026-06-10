@@ -12,24 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""AgentKit CLI - Sandbox commands."""
+"""Get command for sandbox CLI."""
 
 from __future__ import annotations
 
 import typer
 
-from agentkit.toolkit.cli.sandbox.sandbox_create import create_command
-from agentkit.toolkit.cli.sandbox.sandbox_exec import exec_command
-from agentkit.toolkit.cli.sandbox.sandbox_get import get_command
-from agentkit.toolkit.cli.sandbox.sandbox_terminal import terminal_command
+from agentkit.toolkit.cli.sandbox.utils import echo_json, get_session_result
 
-sandbox_app = typer.Typer(
-    name="sandbox",
-    help="Manage AgentKit sandbox sessions",
-    add_completion=False,
-)
 
-sandbox_app.command("create")(create_command)
-sandbox_app.command("get")(get_command)
-sandbox_app.command("exec")(exec_command)
-sandbox_app.command("terminal")(terminal_command)
+def get_command(
+    session_id: str = typer.Option(
+        ...,
+        "--session-id",
+        help="Sandbox session ID to look up.",
+    ),
+) -> None:
+    """Get a sandbox session from the local session store."""
+    result = get_session_result(session_id)
+    echo_json(result)
