@@ -192,17 +192,38 @@ def test_ensure_sandbox_session_passes_envs_to_create_session(
 
 def test_create_command_requires_env_credentials(monkeypatch) -> None:
     from agentkit.toolkit.cli.cli import app
+    from agentkit.toolkit.cli.sandbox import cli_create
 
-    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
-    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
+    class MissingCredentialsConfiguration:
+        def __init__(self, region=None):
+            pass
+
+        def get_service_credentials(self, service_key):
+            raise ValueError(
+                "\n".join(
+                    [
+                        f"Volcengine credentials not found (Service: {service_key}).",
+                        "Recommended (global, set once):",
+                        "  agentkit config --global --set volcengine.access_key=YOUR_ACCESS_KEY",
+                        "  agentkit config --global --set volcengine.secret_key=YOUR_SECRET_KEY",
+                        "Alternative (per-shell):",
+                        "  export VOLCENGINE_ACCESS_KEY=YOUR_ACCESS_KEY",
+                        "  export VOLCENGINE_SECRET_KEY=YOUR_SECRET_KEY",
+                    ]
+                )
+            )
+
+    monkeypatch.setattr(
+        cli_create,
+        "VolcConfiguration",
+        MissingCredentialsConfiguration,
+    )
 
     result = runner.invoke(app, ["create"])
 
     assert result.exit_code == 1
-    assert (
-        "VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY are required"
-        in result.output
-    )
+    assert "Volcengine credentials not found (Service: agentkit)." in result.output
+    assert "agentkit config --global --set volcengine.access_key" in result.output
 
 
 def test_sandbox_command_group_is_removed() -> None:

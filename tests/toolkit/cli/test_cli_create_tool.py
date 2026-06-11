@@ -123,6 +123,51 @@ def _fake_env_credentials(cli_create):
     )
 
 
+def test_load_credentials_uses_volc_configuration(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    captured = {}
+
+    class FakeCredentials:
+        access_key = _PLACEHOLDER_A
+        secret_key = _PLACEHOLDER_B
+        session_token = "example-session-token"
+
+    class FakeVolcConfiguration:
+        def __init__(self, region=None):
+            captured["region"] = region
+
+        def get_service_credentials(self, service_key):
+            captured["service_key"] = service_key
+            return FakeCredentials()
+
+    monkeypatch.setattr(cli_create, "VolcConfiguration", FakeVolcConfiguration)
+
+    credentials = cli_create._load_env_credentials("cn-shanghai")
+
+    assert captured == {
+        "region": "cn-shanghai",
+        "service_key": "agentkit",
+    }
+    assert credentials.access_key == _PLACEHOLDER_A
+    assert credentials.secret_key == _PLACEHOLDER_B
+    assert credentials.session_token == "example-session-token"
+
+
+def test_load_credentials_supports_legacy_volc_env(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
+    monkeypatch.setenv("VOLC_ACCESSKEY", _PLACEHOLDER_A)
+    monkeypatch.setenv("VOLC_SECRETKEY", _PLACEHOLDER_B)
+
+    credentials = cli_create._load_env_credentials()
+
+    assert credentials.access_key == _PLACEHOLDER_A
+    assert credentials.secret_key == _PLACEHOLDER_B
+
+
 def test_create_command_uses_env_credentials_and_default_region(monkeypatch):
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create
@@ -153,6 +198,7 @@ def test_create_command_uses_env_credentials_and_default_region(monkeypatch):
     client = _FakeToolsClient.instances[0]
     assert client.access_key == _PLACEHOLDER_A
     assert client.secret_key == _PLACEHOLDER_B
+    assert client.session_token == ""
     assert client.region == "cn-beijing"
     assert _FakeToolsClient.last_request.name == "demo-tool"
     assert _FakeToolsClient.last_request.tool_type == "CodeEnv"

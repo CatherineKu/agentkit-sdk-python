@@ -17,13 +17,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import os
 import re
 import time
 from typing import Optional
 
 import typer
 
+from agentkit.platform import VolcConfiguration
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.session_create import (
@@ -52,23 +52,25 @@ TOOL_READY_STATUS = "Ready"
 TOOL_FAILED_STATUSES = {"Error", "Failed", "CreateFailed", "Deleting", "Deleted"}
 TOOL_WAIT_INTERVAL_SECONDS = 5
 TOOL_WAIT_TIMEOUT_SECONDS = 600
-VOLCENGINE_ACCESS_KEY_ENV = "VOLCENGINE_ACCESS_KEY"
-VOLCENGINE_SECRET_KEY_ENV = "VOLCENGINE_SECRET_KEY"
+PLATFORM_CREDENTIAL_SERVICE = "agentkit"
+
 
 @dataclass(frozen=True)
 class EnvCredentials:
     access_key: str
     secret_key: str
+    session_token: Optional[str] = None
 
 
-def _load_env_credentials() -> EnvCredentials:
-    access_key = (os.getenv(VOLCENGINE_ACCESS_KEY_ENV) or "").strip()
-    secret_key = (os.getenv(VOLCENGINE_SECRET_KEY_ENV) or "").strip()
-    if not access_key or not secret_key:
-        raise ValueError(
-            "VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY are required"
-        )
-    return EnvCredentials(access_key=access_key, secret_key=secret_key)
+def _load_env_credentials(region: Optional[str] = None) -> EnvCredentials:
+    credentials = VolcConfiguration(region=region).get_service_credentials(
+        PLATFORM_CREDENTIAL_SERVICE
+    )
+    return EnvCredentials(
+        access_key=credentials.access_key,
+        secret_key=credentials.secret_key,
+        session_token=credentials.session_token,
+    )
 
 
 def _normalize_region(region: Optional[str]) -> str:
@@ -105,6 +107,7 @@ class _TOSBucketService:
             region=region,
             access_key=credentials.access_key,
             secret_key=credentials.secret_key,
+            session_token=credentials.session_token,
         ).get_service_endpoint("tos")
         self.endpoint = endpoint.host
         self.client = tos.TosClientV2(
@@ -112,6 +115,7 @@ class _TOSBucketService:
             credentials.secret_key,
             endpoint.host,
             endpoint.region,
+            security_token=credentials.session_token,
         )
 
     def bucket_exists(self) -> bool:
@@ -207,6 +211,7 @@ def _generate_default_tos_bucket(
         access_key=credentials.access_key,
         secret_key=credentials.secret_key,
         region=region,
+        session_token=credentials.session_token,
     ).get_account_id()
     if not account_id:
         raise ValueError("Failed to get account_id for default TOS bucket")
@@ -429,7 +434,7 @@ def create_command(
     """Create an AgentKit Tool with optional TOS mount."""
     try:
         resolved_region = _normalize_region(region)
-        credentials = _load_env_credentials()
+        credentials = _load_env_credentials(resolved_region)
         request = _build_create_tool_request(
             tool_type=tool_type,
             name=tool_name,
@@ -444,6 +449,7 @@ def create_command(
             access_key=credentials.access_key,
             secret_key=credentials.secret_key,
             region=resolved_region,
+            session_token=credentials.session_token or "",
         )
         response = client.create_tool(request)
         tool_id = response.tool_id
