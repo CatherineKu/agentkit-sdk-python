@@ -36,6 +36,61 @@ python3 -m pip show agentkit-sdk-python
 
 ## Commands
 
+### Create
+
+Create an AgentKit Tool for sandbox sessions. This command prepares the backing
+TOS bucket/path, builds a `CreateTool` request, waits until the tool reaches
+`Ready`, and prints the created tool ID.
+
+```bash
+agentkit create \
+  --tool-type CodeEnv \
+  --tool-name demo-sandbox-tool \
+  --tos-bucket agentkit-platform-example
+```
+
+Options:
+
+- `--tool-type`: optional. Tool type to create; defaults to `CodeEnv`.
+- `--tool-name`: optional. Tool name. If omitted, the CLI generates a name like
+  `agentkit-codeenv-<random>`.
+- `--tos-bucket`: optional. TOS bucket mounted at `/home/gem`. If omitted, the
+  CLI uses `TOSService.generate_bucket_name()`, which resolves the configured
+  default bucket template.
+- `--region`: optional. Region for `CreateTool` and TOS operations; defaults to
+  `cn-beijing`.
+- `--model-name`: optional. Injected into the tool as `OPENCODE_MODEL`,
+  `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
+- `--model-api-key`: optional. Injected into the tool as `OPENCODE_API_KEY`,
+  `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`.
+- `--model-base-url`: optional. Injected into the tool as `OPENCODE_BASE_URL`,
+  `CODEX_BASE_URL`, `MODEL_BASE_URL`, and `ANTHROPIC_BASE_URL`. If omitted,
+  Volcengine Ark compatible endpoints are used.
+
+Credential resolution is delegated to the underlying SDK/service clients:
+`AgentkitToolsClient` handles `CreateTool` credentials, and `TOSService` handles
+TOS credentials. The command supports the same credential sources as the shared
+Volcengine configuration, including environment variables and global
+`agentkit config --global` settings.
+
+The generated tool TOS mount uses:
+
+```text
+BucketPath: /sandbox-session/default/default
+LocalMountPath: /home/gem
+Endpoint: http://tos-<region>.ivolces.com
+```
+
+When `exec` or `shell` later creates a session from this tool, the session flow
+calls `GetTool`, reads this mount configuration, and mounts a per-session path:
+
+```text
+/sandbox-session/tool-<tool-id>/session-<session-id>/
+```
+
+`agentkit create` itself does not write `.agentkit/tool.json`; `exec` and
+`shell` cache resolved or auto-created tools there when they need a tool ID.
+
 ### Get
 
 Sync sessions for the current tool, then read a sandbox session from the local
@@ -201,6 +256,7 @@ Example:
 
 - `../cli.py`: registers `create`, `get`, `exec`, and `shell` as top-level commands.
 - `session_create.py`: shared session creation and idempotent ensure helpers.
+- `session_sync.py`: shared remote session list/sync helpers.
 - `tool_resolve.py`: shared sandbox tool resolution and local tool cache helpers.
 - `cli_create.py`: create command implementation.
 - `cli_get.py`: get command implementation.
