@@ -190,13 +190,19 @@ def test_ensure_sandbox_session_passes_envs_to_create_session(
     ]
 
 
-def test_session_create_command_is_removed() -> None:
+def test_create_command_requires_env_credentials(monkeypatch) -> None:
     from agentkit.toolkit.cli.cli import app
+
+    monkeypatch.delenv("VOLCENGINE_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("VOLCENGINE_SECRET_KEY", raising=False)
 
     result = runner.invoke(app, ["create"])
 
-    assert result.exit_code != 0
-    assert "No such command" in result.output
+    assert result.exit_code == 1
+    assert (
+        "VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY are required"
+        in result.output
+    )
 
 
 def test_sandbox_command_group_is_removed() -> None:
