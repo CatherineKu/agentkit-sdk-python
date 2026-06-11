@@ -65,10 +65,6 @@ Options:
   `CODEX_BASE_URL`, `MODEL_BASE_URL`, and `ANTHROPIC_BASE_URL`. If omitted,
   Volcengine Ark compatible endpoints are used.
 
-Region configuration is read from environment variables. `AGENTKIT_SANDBOX_REGION`
-configures AgentKit Tool operations, and `AGENTKIT_SANDBOX_TOS_REGION` configures
-TOS operations. Each defaults to `cn-beijing` when unset or empty.
-
 Credential resolution is delegated to the underlying SDK/service clients:
 `AgentkitToolsClient` handles `CreateTool` credentials, and `TOSService` handles
 TOS credentials. The command supports the same credential sources as the shared
