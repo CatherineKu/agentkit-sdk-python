@@ -36,6 +36,13 @@ from agentkit.toolkit.cli.cli_knowledge import knowledge_app
 from agentkit.toolkit.cli.cli_tools import tools_app
 from agentkit.toolkit.cli.cli_runtime import runtime_app
 from agentkit.toolkit.cli.cli_skills import skills_app
+from agentkit.toolkit.cli.cli_auth import (
+    auth_app,
+    credential_hosting_command,
+    login_command,
+    logout_command,
+    whoami_command,
+)
 from agentkit.toolkit.cli.sandbox.cli_create import create_command
 from agentkit.toolkit.cli.sandbox.cli_exec import exec_command
 from agentkit.toolkit.cli.sandbox.cli_get import get_command
@@ -108,7 +115,14 @@ app.command(name="get")(get_command)
 app.command(name="exec")(exec_command)
 app.command(name="shell")(shell_command)
 
+# Auth: top-level convenience commands + an `auth` group for profiles.
+app.command(name="login")(login_command)
+app.command(name="logout")(logout_command)
+app.command(name="whoami")(whoami_command)
+app.command(name="credential-hosting")(credential_hosting_command)
+
 # Sub-app groups
+app.add_typer(auth_app, name="auth")
 app.add_typer(memory_app, name="memory")
 app.add_typer(knowledge_app, name="knowledge")
 app.add_typer(tools_app, name="tools")
