@@ -164,6 +164,14 @@ def _ensure_oidc_provider(
     except ApiError as exc:
         if "Exist" not in exc.code and "Conflict" not in exc.code:
             raise
+        # A provider with this name already exists. Only reuse it if it trusts the
+        # same issuer — otherwise we'd attach the client to the wrong provider.
+        got = api.call("iam", "GetOIDCProvider", "2018-01-01", {"OIDCProviderName": provider_name})
+        if (got.get("IssuerURL") or got.get("IssuerUrl")) != issuer:
+            raise AuthError(
+                f"OIDC provider '{provider_name}' already exists for a different issuer; "
+                "choose a different provider name or remove the existing one."
+            )
         api.call_ok("iam", "AddClientIDToOIDCProvider", "2018-01-01",
                     {"OIDCProviderName": provider_name, "ClientID": client_id})
     return provider_name

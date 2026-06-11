@@ -27,10 +27,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import stat
 from pathlib import Path
 
 _KEYRING_SERVICE = "agentkit-auth"
+# A profile name becomes a filename, so it must not contain path separators or `..`.
+_SAFE_PROFILE = re.compile(r"[A-Za-z0-9_.-]+")
 
 
 def sessions_dir() -> Path:
@@ -45,7 +48,13 @@ def sessions_dir() -> Path:
 
 
 def _session_path(profile: str) -> Path:
-    return sessions_dir() / f"{profile}.json"
+    if profile in (".", "..") or not _SAFE_PROFILE.fullmatch(profile or ""):
+        raise ValueError(f"invalid profile name: {profile!r}")
+    base = sessions_dir().resolve()
+    path = (base / f"{profile}.json").resolve()
+    if path.parent != base:  # defence in depth against path traversal
+        raise ValueError(f"invalid profile name (path traversal): {profile!r}")
+    return path
 
 
 def _try_keyring():

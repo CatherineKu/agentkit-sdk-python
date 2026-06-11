@@ -256,44 +256,110 @@ def _ensure_plugin(api: OpenApiClient, gateway_id: str, plugin_name: str) -> Non
              {"GatewayId": gateway_id, "PluginName": plugin_name, "Enable": True, "PluginConfig": ""})
 
 
+def _already_exists(exc: ApiError) -> bool:
+    c = exc.code.lower()
+    return any(tok in c for tok in ("duplicat", "exist", "conflict", "repeat"))
+
+
+def _bind_plugin(api: OpenApiClient, route_id: str, plugin_name: str, config: dict) -> None:
+    """Bind a plugin to a route, tolerating an existing identical binding (idempotent)."""
+    try:
+        api.call("apig", "CreatePluginBinding", "2021-03-03", {
+            "PluginName": plugin_name, "Scope": "ROUTE", "Target": route_id, "Enable": True,
+            "PluginConfig": json.dumps(config),
+        })
+    except ApiError as exc:
+        if not _already_exists(exc):
+            raise
+
+
 def build_gateway_line(
     api: OpenApiClient, gateway_id: str, *, provider_name: str, relay_function_id: str,
     service_name: str, region: str = "cn-beijing",
 ) -> dict:
-    """Create the upstream → service → route and bind the gateway plugins; return a ticket."""
+    """Create the upstream/service/route and bind the gateway plugins; return a ticket.
+
+    Idempotent for the infrastructure: every resource uses a deterministic name and
+    falls back to a list-and-match on an 'already exists' error, so a retry after a
+    partial failure converges instead of erroring. The ticket, however, is a write-only
+    key-auth secret: it is issued only for a newly created consumer credential. If the
+    line already carries one, this raises so the caller can revoke and re-issue rather
+    than return a ticket that was never registered.
+    """
+    def _find(action: str, version: str, params: dict, name_field: str, want: str) -> dict:
+        res = api.call("apig", action, version, {**params, "PageNumber": 1, "PageSize": 100})
+        for it in (res.get("Items") or []):
+            if str(it.get(name_field) or "") == want:
+                return it
+        return {}
+
     _ensure_plugin(api, gateway_id, "wasm-upstream-identity")
     _ensure_plugin(api, gateway_id, "wasm-key-auth")
-    up = api.call("apig", "CreateUpstream", "2021-03-03", {
-        "GatewayId": gateway_id, "Name": f"{service_name}-up", "SourceType": "VeFaas",
-        "Protocol": "HTTP", "UpstreamSpec": {"VeFaas": {"FunctionId": relay_function_id}},
-    })
-    uid = up.get("Id")
-    svc = api.call("apig", "CreateGatewayService", "2021-03-03", {
-        "GatewayId": gateway_id, "ServiceName": service_name, "Protocol": ["HTTP"],
-        "DomainType": "DefaultDomain", "AuthSpec": {"Enable": False},
-        "ServiceNetworkSpec": {"EnablePublicNetwork": True, "EnablePrivateNetwork": False},
-    })
+
+    up_name = f"{service_name}-up"
+    try:
+        up = api.call("apig", "CreateUpstream", "2021-03-03", {
+            "GatewayId": gateway_id, "Name": up_name, "SourceType": "VeFaas",
+            "Protocol": "HTTP", "UpstreamSpec": {"VeFaas": {"FunctionId": relay_function_id}},
+        })
+    except ApiError as exc:
+        if not _already_exists(exc):
+            raise
+        up = _find("ListUpstreams", "2021-03-03", {"GatewayId": gateway_id}, "Name", up_name)
+    uid = str(up.get("Id") or "")
+
+    try:
+        svc = api.call("apig", "CreateGatewayService", "2021-03-03", {
+            "GatewayId": gateway_id, "ServiceName": service_name, "Protocol": ["HTTP"],
+            "DomainType": "DefaultDomain", "AuthSpec": {"Enable": False},
+            "ServiceNetworkSpec": {"EnablePublicNetwork": True, "EnablePrivateNetwork": False},
+        })
+    except ApiError as exc:
+        if not _already_exists(exc):
+            raise
+        svc = _find("ListGatewayServices", "2021-03-03", {"GatewayId": gateway_id}, "ServiceName", service_name)
     sid = str(svc.get("Id") or "")
-    route = api.call("apig", "CreateRoute", "2022-11-12", {
-        "Name": f"{service_name}-route", "ServiceId": sid,
-        "MatchRule": {"Path": {"MatchType": "Prefix", "MatchContent": "/"}, "Method": ["POST", "GET"]},
-        "UpstreamList": [{"UpstreamId": uid, "Weight": 100}], "Enable": True, "Priority": 0,
-    })
+
+    route_name = f"{service_name}-route"
+    try:
+        route = api.call("apig", "CreateRoute", "2022-11-12", {
+            "Name": route_name, "ServiceId": sid,
+            "MatchRule": {"Path": {"MatchType": "Prefix", "MatchContent": "/"}, "Method": ["POST", "GET"]},
+            "UpstreamList": [{"UpstreamId": uid, "Weight": 100}], "Enable": True, "Priority": 0,
+        })
+    except ApiError as exc:
+        if not _already_exists(exc):
+            raise
+        route = _find("ListRoutes", "2022-11-12", {"ServiceId": sid}, "Name", route_name)
     rid = str(route.get("Id") or "")
-    api.call("apig", "CreatePluginBinding", "2021-03-03", {
-        "PluginName": "wasm-upstream-identity", "Scope": "ROUTE", "Target": rid, "Enable": True,
-        "PluginConfig": json.dumps({"ProviderType": "ApiKey", "ProviderName": provider_name, "FailureModeAllow": False}),
-    })
+
+    _bind_plugin(api, rid, "wasm-upstream-identity",
+                 {"ProviderType": "ApiKey", "ProviderName": provider_name, "FailureModeAllow": False})
+
+    try:
+        consumer = api.call("apig", "CreateConsumer", "2021-03-03", {"Name": service_name, "GatewayId": gateway_id})
+    except ApiError as exc:
+        if not _already_exists(exc):
+            raise
+        consumer = _find("ListConsumers", "2021-03-03", {"GatewayId": gateway_id}, "Name", service_name)
+    cid = str(consumer.get("Id") or consumer.get("ConsumerId") or "")
+
     ticket = "ck-" + secrets.token_hex(20)
-    consumer = api.call("apig", "CreateConsumer", "2021-03-03", {"Name": service_name, "GatewayId": gateway_id})
-    cid = consumer.get("Id") or consumer.get("ConsumerId")
-    api.call("apig", "CreateConsumerCredential", "2021-03-03", {
-        "ConsumerId": cid, "CredentialType": "key-auth", "KeyAuthCredential": {"APIKey": ticket},
-    })
-    api.call("apig", "CreatePluginBinding", "2021-03-03", {
-        "PluginName": "wasm-key-auth", "Scope": "ROUTE", "Target": rid, "Enable": True,
-        "PluginConfig": json.dumps({"KeySources": [{"Header": "authorization"}], "AllowedConsumers": [service_name]}),
-    })
+    try:
+        api.call("apig", "CreateConsumerCredential", "2021-03-03", {
+            "ConsumerId": cid, "CredentialType": "key-auth", "KeyAuthCredential": {"APIKey": ticket},
+        })
+    except ApiError as exc:
+        if not _already_exists(exc):
+            raise
+        raise AuthError(
+            f"credential line for '{service_name}' already carries a ticket; revoke it "
+            "(or use a different provider name) to issue a new one."
+        )
+
+    _bind_plugin(api, rid, "wasm-key-auth",
+                 {"KeySources": [{"Header": "authorization"}], "AllowedConsumers": [service_name]})
+
     return {"service_id": sid, "route_id": rid, "ticket": ticket,
             "gateway_url": f"http://{sid}.apigateway-{region}.volceapi.com"}
 

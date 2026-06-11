@@ -180,5 +180,5 @@ def resolve_profile(address: str, *, timeout: float = _TIMEOUT, harden_ssl: bool
 
 
 def _derive_region(host: str) -> str | None:
-    m = re.search(r"\b(cn-[a-z]+|ap-[a-z]+-\d|us-[a-z]+)\b", host)
-    return m.group(1) if m else None
+    m = re.search(r"\b(?:cn-[a-z]+|(?:us|ap|eu|sa|af|me|ca)-[a-z]+-\d)\b", host)
+    return m.group(0) if m else None

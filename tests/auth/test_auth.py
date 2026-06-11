@@ -320,3 +320,24 @@ def test_set_tool_env_merges_existing_envs():
     assert envs["A"] == "1"                          # pre-existing env preserved
     assert envs["ARK_API_KEY"] == "ck-new"           # overridden
     assert envs["CODEX_BASE_URL"] == "http://gw/v3"  # added
+
+
+def test_session_path_rejects_traversal():
+    import pytest
+    from agentkit.auth import store
+
+    for bad in ("../evil", "a/b", "..", ".", "x/../y", "/abs", "", "a b"):
+        with pytest.raises(ValueError):
+            store._session_path(bad)
+    p = store._session_path("my-pool.example.com")
+    assert p.name == "my-pool.example.com.json"
+    assert p.parent == store.sessions_dir().resolve()
+
+
+def test_derive_region_handles_numbered_regions():
+    from agentkit.auth.resolve import _derive_region
+
+    assert _derive_region("x.cn-beijing.volces.com") == "cn-beijing"
+    assert _derive_region("x.ap-southeast-1.volces.com") == "ap-southeast-1"
+    assert _derive_region("x.us-east-1.example.com") == "us-east-1"
+    assert _derive_region("no-region-here") is None

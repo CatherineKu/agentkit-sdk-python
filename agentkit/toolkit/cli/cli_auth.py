@@ -251,6 +251,8 @@ def _admin_app() -> typer.Typer:
             if typer.confirm("是否需要与上游 IdP(如现有 SSO 登录系统)做联邦登录?", default=False):
                 idp = typer.prompt("  上游 IdP 类型 (bytedance/feishu)", default="bytedance").strip().lower()
         if idp and not (idp_client_id and idp_secret):
+            if not interactive:
+                _fail("非交互模式下用 --idp 需同时提供 --idp-client-id 与 --idp-secret。")
             idp_client_id = idp_client_id or typer.prompt(f"  {idp} 应用 client-id")
             idp_secret = idp_secret or typer.prompt(f"  {idp} 应用 secret", hide_input=True)
 
