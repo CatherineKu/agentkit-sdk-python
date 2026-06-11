@@ -86,8 +86,9 @@ calls `GetTool`, reads this mount configuration, and mounts a per-session path:
 /sandbox-session/tool-<tool-id>/session-<session-id>/
 ```
 
-`agentkit create` itself does not write `.agentkit/tool.json`; `exec` and
-`shell` cache resolved or auto-created tools there when they need a tool ID.
+After the tool reaches `Ready`, `agentkit create` writes the tool information to
+`.agentkit/sandbox/tools.json`. Only one tool record is stored per `ToolType`;
+creating or resolving another tool of the same type replaces that type's record.
 
 ### Get
 
@@ -221,14 +222,14 @@ remote session.
 When `--tool-id` and `AGENTKIT_SANDBOX_TOOL_ID` are both omitted, `exec` and
 `shell` resolve one tool per type through:
 
-1. `.agentkit/tool.json`
+1. `.agentkit/sandbox/tools.json`
 2. `ListTools` filtered by `ToolType`
 3. automatic `agentkit create --tool-type <type>`-equivalent creation
 
 Resolved tool records are stored in:
 
 ```text
-.agentkit/tool.json
+.agentkit/sandbox/tools.json
 ```
 
 Example:
@@ -236,16 +237,16 @@ Example:
 ```json
 {
   "CodeEnv": {
-    "tool_id": "t-code-example",
-    "tool_type": "CodeEnv",
-    "name": "agentkit-codeenv-example",
-    "status": "Ready"
+    "ToolId": "t-code-example",
+    "Name": "agentkit-codeenv-example",
+    "Status": "Ready",
+    "ToolType": "CodeEnv"
   },
   "SkillEnv": {
-    "tool_id": "t-skill-example",
-    "tool_type": "SkillEnv",
-    "name": "agentkit-skillenv-example",
-    "status": "Ready"
+    "ToolId": "t-skill-example",
+    "Name": "agentkit-skillenv-example",
+    "Status": "Ready",
+    "ToolType": "SkillEnv"
   }
 }
 ```

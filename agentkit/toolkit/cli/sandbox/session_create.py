@@ -17,12 +17,16 @@
 from __future__ import annotations
 
 import os
+import time
 import uuid
 from typing import Optional
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
-from agentkit.toolkit.cli.sandbox.session_sync import sync_remote_sessions
+from agentkit.toolkit.cli.sandbox.session_sync import (
+    session_info_to_result,
+    sync_remote_sessions,
+)
 from agentkit.toolkit.cli.sandbox.tool_resolve import (
     DEFAULT_SANDBOX_TOOL_TYPE,
     resolve_sandbox_tool_id,
@@ -42,6 +46,10 @@ MODEL_API_KEY_ENV_KEYS = (
     "CODEX_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
 )
+CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
+CREATE_SESSION_CONFIRM_ATTEMPTS = 6
+CREATE_SESSION_CONFIRM_INTERVAL_SECONDS = 5
+CREATE_SESSION_READY_STATUS = "ready"
 
 
 def _append_envs(
@@ -96,6 +104,23 @@ def _is_session_missing_error(exc: Exception) -> bool:
             "不存在",
         )
     )
+
+
+def _is_create_session_start_fail_error(exc: Exception) -> bool:
+    return CREATE_SESSION_START_FAIL_CODE in str(exc)
+
+
+def _is_confirmed_session_ready(
+    session: tools_types.SessionInfosForListSessions,
+) -> bool:
+    status = getattr(session, "status", None)
+    endpoint = getattr(session, "endpoint", None)
+    if (
+        not isinstance(status, str)
+        or status.strip().lower() != CREATE_SESSION_READY_STATUS
+    ):
+        return False
+    return isinstance(endpoint, str) and bool(endpoint.strip())
 
 
 def _build_result(
@@ -234,8 +259,54 @@ def _create_session(
             session_id=session_id,
         ),
     )
-    response = client.create_session(request)
+    try:
+        response = client.create_session(request)
+    except Exception as exc:
+        if not _is_create_session_start_fail_error(exc):
+            raise
+        result = _confirm_session_after_create_start_fail(
+            client,
+            session_id=session_id,
+            tool_id=tool_id,
+        )
+        if result:
+            return result
+        raise
     return _build_create_result(response, session_id, tool_id)
+
+
+def _confirm_session_after_create_start_fail(
+    client: AgentkitToolsClient,
+    *,
+    session_id: str,
+    tool_id: str,
+) -> dict[str, object] | None:
+    for attempt in range(CREATE_SESSION_CONFIRM_ATTEMPTS):
+        response = client.list_sessions(
+            tools_types.ListSessionsRequest(
+                tool_id=tool_id,
+                max_results=10,
+                filters=[
+                    tools_types.FiltersItemForListSessions(
+                        name="UserSessionId",
+                        values=[session_id],
+                    )
+                ],
+            )
+        )
+        for session in response.session_infos or []:
+            result = session_info_to_result(session, tool_id)
+            if (
+                result
+                and result.get("session_id") == session_id
+                and _is_confirmed_session_ready(session)
+            ):
+                return result
+
+        if attempt < CREATE_SESSION_CONFIRM_ATTEMPTS - 1:
+            time.sleep(CREATE_SESSION_CONFIRM_INTERVAL_SECONDS)
+
+    return None
 
 
 def ensure_sandbox_session(

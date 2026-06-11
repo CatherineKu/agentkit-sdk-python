@@ -14,12 +14,29 @@
 
 from __future__ import annotations
 
+import json
+
+import pytest
 from typer.testing import CliRunner
 
 runner = CliRunner()
 _PLACEHOLDER_A = "example-value-a"
 _PLACEHOLDER_B = "example-value-b"
 _PLACEHOLDER_MODEL_VALUE = "example-model-value"
+
+
+@pytest.fixture
+def tool_store_path(monkeypatch, tmp_path):
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    store_path = tmp_path / ".agentkit" / "sandbox" / "tools.json"
+    monkeypatch.setattr(tool_resolve, "_get_tool_store_path", lambda: store_path)
+    return store_path
+
+
+@pytest.fixture(autouse=True)
+def _use_tool_store_path(tool_store_path):
+    pass
 
 
 class _FakeCreateToolResponse:
@@ -137,7 +154,10 @@ def _reset_fake_tools_client():
     _FakeTOSService.instances = []
 
 
-def test_create_command_uses_tos_service_and_default_region(monkeypatch):
+def test_create_command_uses_tos_service_and_default_region(
+    monkeypatch,
+    tool_store_path,
+):
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create
 
@@ -172,6 +192,14 @@ def test_create_command_uses_tos_service_and_default_region(monkeypatch):
         == "/sandbox-session/default/default"
     )
     assert _FakeToolsClient.get_call_count == 1
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "SkillEnv": {
+            "ToolId": "t-created",
+            "Name": "demo-tool",
+            "Status": "Ready",
+            "ToolType": "SkillEnv",
+        }
+    }
 
 
 def test_create_command_uses_region_envs(monkeypatch):

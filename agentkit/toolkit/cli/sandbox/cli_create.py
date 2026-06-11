@@ -29,6 +29,7 @@ from agentkit.toolkit.cli.sandbox.session_create import (
     MODEL_API_KEY_ENV_KEYS,
     MODEL_NAME_ENV_KEYS,
 )
+from agentkit.toolkit.cli.sandbox.tool_resolve import save_tool_result
 from agentkit.toolkit.cli.sandbox.utils import error
 from agentkit.toolkit.volcengine.services.tos_service import (
     TOSMountConfig,
@@ -344,6 +345,7 @@ def create_command(
             model_api_key=model_api_key,
             model_base_url=model_base_url,
         )
+        save_tool_result(str(result["tool_type"]), result)
     except (typer.Abort, typer.Exit):
         raise
     except Exception as exc:

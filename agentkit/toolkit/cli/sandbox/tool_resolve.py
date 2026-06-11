@@ -26,7 +26,7 @@ from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.utils import error
 
-SANDBOX_TOOL_STORE_PATH = Path(".agentkit") / "tool.json"
+SANDBOX_TOOL_STORE_PATH = Path(".agentkit") / "sandbox" / "tools.json"
 DEFAULT_SANDBOX_TOOL_TYPE = "CodeEnv"
 VALID_SANDBOX_TOOL_TYPES = ("CodeEnv", "SkillEnv")
 
@@ -72,24 +72,47 @@ def _build_tool_record(tool: object, tool_type: str) -> dict[str, object] | None
         return None
 
     return {
-        "tool_id": tool_id.strip(),
-        "tool_type": getattr(tool, "tool_type", None) or tool_type,
-        "name": getattr(tool, "name", None),
-        "status": getattr(tool, "status", None),
+        "ToolId": tool_id.strip(),
+        "ToolType": getattr(tool, "tool_type", None) or tool_type,
+        "Name": getattr(tool, "name", None),
+        "Status": getattr(tool, "status", None),
+    }
+
+
+def _get_string_value(result: dict[str, object], *keys: str) -> str | None:
+    for key in keys:
+        value = result.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _normalize_tool_record(
+    tool_type: str,
+    result: dict[str, object],
+) -> dict[str, object]:
+    resolved_tool_type = normalize_tool_type(
+        _get_string_value(result, "ToolType", "tool_type") or tool_type
+    )
+    tool_id = _get_string_value(result, "ToolId", "tool_id")
+    if not tool_id:
+        error("Tool result missing ToolId")
+
+    return {
+        "ToolId": tool_id,
+        "Name": _get_string_value(result, "Name", "name") or "",
+        "Status": _get_string_value(result, "Status", "status") or "",
+        "ToolType": resolved_tool_type,
     }
 
 
 def save_tool_result(tool_type: str, result: dict[str, object]) -> None:
-    tool_id = result.get("tool_id")
-    if not isinstance(tool_id, str) or not tool_id:
-        error("Tool result missing tool_id")
-
-    resolved_tool_type = normalize_tool_type(tool_type)
+    stored = _normalize_tool_record(tool_type, result)
+    resolved_tool_type = stored["ToolType"]
     path = _get_tool_store_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = _load_tool_store(path)
-    stored = {"tool_type": resolved_tool_type, **result}
     data[resolved_tool_type] = stored
     path.write_text(
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
@@ -115,9 +138,9 @@ def _get_cached_tool_id(tool_type: str) -> str | None:
     if not result:
         return None
 
-    tool_id = result.get("tool_id")
-    if isinstance(tool_id, str) and tool_id.strip():
-        return tool_id.strip()
+    tool_id = _get_string_value(result, "ToolId", "tool_id")
+    if tool_id:
+        return tool_id
     return None
 
 
@@ -139,7 +162,7 @@ def _list_first_tool(
         if not record:
             continue
         save_tool_result(tool_type, record)
-        tool_id = record["tool_id"]
+        tool_id = record["ToolId"]
         if isinstance(tool_id, str):
             return tool_id
     return None
@@ -150,9 +173,9 @@ def _create_tool(tool_type: str) -> str:
 
     result = create_tool(tool_type=tool_type)
     save_tool_result(tool_type, result)
-    tool_id = result.get("tool_id")
-    if not isinstance(tool_id, str) or not tool_id:
-        error("CreateTool response missing tool_id")
+    tool_id = _get_string_value(result, "ToolId", "tool_id")
+    if not tool_id:
+        error("CreateTool response missing ToolId")
     return tool_id
 
 

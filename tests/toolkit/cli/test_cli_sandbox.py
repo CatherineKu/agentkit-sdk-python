@@ -62,10 +62,12 @@ class _FakeSessionInfo:
         user_session_id="user-1",
         session_id="instance-1",
         endpoint="https://sandbox.example.com",
+        status="Ready",
     ):
         self.user_session_id = user_session_id
         self.session_id = session_id
         self.endpoint = endpoint
+        self.status = status
 
 
 class _FakeListSessionsResponse:
@@ -105,6 +107,7 @@ class _FakeToolsClient:
     get_tool_response = _FakeGetToolResponse()
     list_response = _FakeListToolsResponse()
     list_sessions_responses = [_FakeListSessionsResponse()]
+    create_error = None
     get_error = None
     create_call_count = 0
     get_call_count = 0
@@ -115,6 +118,8 @@ class _FakeToolsClient:
     def create_session(self, request):
         _FakeToolsClient.last_request = request
         _FakeToolsClient.create_call_count += 1
+        if _FakeToolsClient.create_error:
+            raise _FakeToolsClient.create_error
         return _FakeToolsClient.response
 
     def get_session(self, request):
@@ -158,6 +163,7 @@ def _reset_fake_client():
     _FakeToolsClient.get_tool_response = _FakeGetToolResponse()
     _FakeToolsClient.list_response = _FakeListToolsResponse()
     _FakeToolsClient.list_sessions_responses = [_FakeListSessionsResponse()]
+    _FakeToolsClient.create_error = None
     _FakeToolsClient.get_error = None
     _FakeToolsClient.create_call_count = 0
     _FakeToolsClient.get_call_count = 0
@@ -177,7 +183,7 @@ def _patch_store_path(monkeypatch, tmp_path):
 def _patch_tool_store_path(monkeypatch, tmp_path):
     import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
 
-    store_path = tmp_path / "tool.json"
+    store_path = tmp_path / ".agentkit" / "sandbox" / "tools.json"
     monkeypatch.setattr(tool_resolve, "_get_tool_store_path", lambda: store_path)
     return store_path
 
@@ -257,13 +263,15 @@ def test_ensure_sandbox_session_uses_cached_tool_by_type(
     )
     _patch_store_path(monkeypatch, tmp_path)
     tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    tool_store_path.parent.mkdir(parents=True, exist_ok=True)
     tool_store_path.write_text(
         json.dumps(
             {
                 "SkillEnv": {
-                    "tool_id": "tool-from-cache",
-                    "tool_type": "SkillEnv",
-                    "name": "cached-tool",
+                    "ToolId": "tool-from-cache",
+                    "ToolType": "SkillEnv",
+                    "Name": "cached-tool",
+                    "Status": "Ready",
                 }
             }
         ),
@@ -304,10 +312,10 @@ def test_ensure_sandbox_session_lists_tool_by_type_and_caches_result(
     ]
     assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
         "SkillEnv": {
-            "tool_id": "tool-from-list",
-            "tool_type": "SkillEnv",
-            "name": "listed-tool",
-            "status": "Ready",
+            "ToolId": "tool-from-list",
+            "Name": "listed-tool",
+            "Status": "Ready",
+            "ToolType": "SkillEnv",
         }
     }
 
@@ -344,10 +352,10 @@ def test_ensure_sandbox_session_creates_tool_when_no_tool_exists(
     assert _FakeToolsClient.last_request.tool_id == "tool-from-create"
     assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
         "CodeEnv": {
-            "tool_id": "tool-from-create",
-            "tool_type": "CodeEnv",
-            "name": "created-tool",
-            "status": "Ready",
+            "ToolId": "tool-from-create",
+            "Name": "created-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
         }
     }
 
@@ -472,6 +480,186 @@ def test_ensure_sandbox_session_mounts_tool_tos_by_tool_and_session(
         == "/sandbox-session/tool-tool-cli/session-user-cli/"
     )
     assert mount_points[0].local_mount_path == "/home/gem"
+
+
+def test_ensure_sandbox_session_confirms_create_start_fail_by_user_session_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    monkeypatch.setattr(session_create.time, "sleep", lambda _seconds: None)
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.create_error = Exception(
+        'Failed to CreateSession: b\'{"ResponseMetadata":{"Error":'
+        '{"Code":"ErrCreateSessionFail","Message":"Session start fail"}}}\''
+    )
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(),
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-cli",
+                    session_id="confirmed-instance",
+                    endpoint="https://confirmed.example.com",
+                )
+            ]
+        ),
+    ]
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.list_sessions_call_count == 2
+    assert [
+        (item.name, item.values)
+        for item in _FakeToolsClient.last_list_sessions_request.filters
+    ] == [("UserSessionId", ["user-cli"])]
+    assert result == {
+        "session_id": "user-cli",
+        "tool_id": "tool-cli",
+        "instance_id": "confirmed-instance",
+        "endpoint": "https://confirmed.example.com",
+    }
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {
+        "user-cli": result
+    }
+
+
+def test_ensure_sandbox_session_waits_for_ready_after_create_start_fail(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    sleeps = []
+    monkeypatch.setattr(session_create.time, "sleep", sleeps.append)
+    _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.create_error = Exception(
+        'Failed to CreateSession: b\'{"ResponseMetadata":{"Error":'
+        '{"Code":"ErrCreateSessionFail","Message":"Session start fail"}}}\''
+    )
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(),
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-cli",
+                    session_id="pending-instance",
+                    endpoint="https://pending.example.com",
+                    status="Creating",
+                )
+            ]
+        ),
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-cli",
+                    session_id="ready-instance",
+                    endpoint="https://ready.example.com",
+                    status="Ready",
+                )
+            ]
+        ),
+    ]
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.list_sessions_call_count == 3
+    assert sleeps == [5]
+    assert result == {
+        "session_id": "user-cli",
+        "tool_id": "tool-cli",
+        "instance_id": "ready-instance",
+        "endpoint": "https://ready.example.com",
+    }
+
+
+def test_ensure_sandbox_session_requires_endpoint_after_create_start_fail(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    sleeps = []
+    monkeypatch.setattr(session_create.time, "sleep", sleeps.append)
+    _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.create_error = Exception(
+        'Failed to CreateSession: b\'{"ResponseMetadata":{"Error":'
+        '{"Code":"ErrCreateSessionFail","Message":"Session start fail"}}}\''
+    )
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(),
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-cli",
+                    session_id="instance-without-endpoint",
+                    endpoint="",
+                    status="Ready",
+                )
+            ]
+        )
+    ]
+
+    with pytest.raises(Exception, match="ErrCreateSessionFail"):
+        session_create.ensure_sandbox_session(
+            session_id="user-cli",
+            tool_id="tool-cli",
+        )
+
+    assert _FakeToolsClient.list_sessions_call_count == 7
+    assert sleeps == [5, 5, 5, 5, 5]
+
+
+def test_ensure_sandbox_session_reraises_create_start_fail_after_confirm_retries(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    sleeps = []
+    monkeypatch.setattr(session_create.time, "sleep", sleeps.append)
+    _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.create_error = Exception(
+        'Failed to CreateSession: b\'{"ResponseMetadata":{"Error":'
+        '{"Code":"ErrCreateSessionFail","Message":"Session start fail"}}}\''
+    )
+
+    with pytest.raises(Exception, match="ErrCreateSessionFail"):
+        session_create.ensure_sandbox_session(
+            tool_id="tool-cli",
+        )
+
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.list_sessions_call_count == 6
+    assert sleeps == [5, 5, 5, 5, 5]
 
 
 def test_create_command_requires_env_credentials(monkeypatch) -> None:
