@@ -34,6 +34,28 @@ class _FakeGetSessionResponse:
     endpoint = None
 
 
+class _FakeToolMountPoint:
+    def __init__(
+        self,
+        bucket_name="agentkit-platform-123",
+        bucket_path="/sandbox-session/default/default",
+        local_mount_path="/home/gem",
+    ):
+        self.bucket_name = bucket_name
+        self.bucket_path = bucket_path
+        self.local_mount_path = local_mount_path
+
+
+class _FakeToolTosMountConfig:
+    def __init__(self, mount_points=None):
+        self.mount_points = [] if mount_points is None else mount_points
+
+
+class _FakeGetToolResponse:
+    def __init__(self, tos_mount_config=None):
+        self.tos_mount_config = tos_mount_config
+
+
 class _FakeSessionInfo:
     def __init__(
         self,
@@ -74,16 +96,19 @@ class _FakeListToolsResponse:
 class _FakeToolsClient:
     last_request = None
     last_get_request = None
+    last_get_tool_request = None
     last_list_request = None
     last_list_sessions_request = None
     list_sessions_requests = []
     response = _FakeCreateSessionResponse()
     get_response = _FakeGetSessionResponse()
+    get_tool_response = _FakeGetToolResponse()
     list_response = _FakeListToolsResponse()
     list_sessions_responses = [_FakeListSessionsResponse()]
     get_error = None
     create_call_count = 0
     get_call_count = 0
+    get_tool_call_count = 0
     list_call_count = 0
     list_sessions_call_count = 0
 
@@ -98,6 +123,11 @@ class _FakeToolsClient:
         if _FakeToolsClient.get_error:
             raise _FakeToolsClient.get_error
         return _FakeToolsClient.get_response
+
+    def get_tool(self, request):
+        _FakeToolsClient.last_get_tool_request = request
+        _FakeToolsClient.get_tool_call_count += 1
+        return _FakeToolsClient.get_tool_response
 
     def list_tools(self, request):
         _FakeToolsClient.last_list_request = request
@@ -119,16 +149,19 @@ class _FakeToolsClient:
 def _reset_fake_client():
     _FakeToolsClient.last_request = None
     _FakeToolsClient.last_get_request = None
+    _FakeToolsClient.last_get_tool_request = None
     _FakeToolsClient.last_list_request = None
     _FakeToolsClient.last_list_sessions_request = None
     _FakeToolsClient.list_sessions_requests = []
     _FakeToolsClient.response = _FakeCreateSessionResponse()
     _FakeToolsClient.get_response = _FakeGetSessionResponse()
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse()
     _FakeToolsClient.list_response = _FakeListToolsResponse()
     _FakeToolsClient.list_sessions_responses = [_FakeListSessionsResponse()]
     _FakeToolsClient.get_error = None
     _FakeToolsClient.create_call_count = 0
     _FakeToolsClient.get_call_count = 0
+    _FakeToolsClient.get_tool_call_count = 0
     _FakeToolsClient.list_call_count = 0
     _FakeToolsClient.list_sessions_call_count = 0
 
@@ -377,6 +410,70 @@ def test_ensure_sandbox_session_passes_envs_to_create_session(
     ]
 
 
+def test_ensure_sandbox_session_skips_tos_mount_when_tool_has_none(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+
+    session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.get_tool_call_count == 1
+    assert _FakeToolsClient.last_get_tool_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_request.tos_mount_points is None
+
+
+def test_ensure_sandbox_session_mounts_tool_tos_by_tool_and_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tos_mount_config=_FakeToolTosMountConfig(
+            [
+                _FakeToolMountPoint(
+                    bucket_name="agentkit-platform-123",
+                    bucket_path="/sandbox-session/default/default",
+                    local_mount_path="/home/gem",
+                )
+            ]
+        )
+    )
+
+    session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.get_tool_call_count == 1
+    assert _FakeToolsClient.last_get_tool_request.tool_id == "tool-cli"
+    mount_points = _FakeToolsClient.last_request.tos_mount_points
+    assert len(mount_points) == 1
+    assert mount_points[0].bucket_name == "agentkit-platform-123"
+    assert (
+        mount_points[0].bucket_path
+        == "/sandbox-session/tool-tool-cli/session-user-cli/"
+    )
+    assert mount_points[0].local_mount_path == "/home/gem"
+
+
 def test_create_command_requires_env_credentials(monkeypatch) -> None:
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create
@@ -455,6 +552,7 @@ def test_ensure_sandbox_session_reuses_existing_remote_session(
 
     assert _FakeToolsClient.create_call_count == 0
     assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.get_tool_call_count == 0
     assert _FakeToolsClient.last_get_request.tool_id == "tool-stored"
     assert _FakeToolsClient.last_get_request.session_id == "session-existing"
     assert result == {
@@ -466,6 +564,59 @@ def test_ensure_sandbox_session_reuses_existing_remote_session(
 
     stored = json.loads(store_path.read_text(encoding="utf-8"))
     assert stored["same-user-session"] == result
+
+
+def test_ensure_sandbox_session_syncs_missing_local_session_before_create(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    class ExistingResponse:
+        user_session_id = "remote-user"
+        session_id = "remote-instance"
+        endpoint = "https://remote.example.com"
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="remote-user",
+                    session_id="remote-instance",
+                    endpoint="https://listed.example.com",
+                )
+            ]
+        )
+    ]
+    _FakeToolsClient.get_response = ExistingResponse()
+
+    result = session_create.ensure_sandbox_session(
+        session_id="remote-user",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.list_sessions_call_count == 1
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.get_tool_call_count == 0
+    assert _FakeToolsClient.last_list_sessions_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_get_request.session_id == "remote-instance"
+    assert result == {
+        "session_id": "remote-user",
+        "tool_id": "tool-cli",
+        "instance_id": "remote-instance",
+        "endpoint": "https://remote.example.com",
+    }
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {
+        "remote-user": result
+    }
 
 
 def test_ensure_sandbox_session_recreates_when_remote_session_missing(
@@ -507,6 +658,7 @@ def test_ensure_sandbox_session_recreates_when_remote_session_missing(
     )
 
     assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.get_tool_call_count == 1
     assert _FakeToolsClient.create_call_count == 1
     assert _FakeToolsClient.last_get_request.tool_id == "tool-new"
     assert _FakeToolsClient.last_get_request.session_id == "session-old"

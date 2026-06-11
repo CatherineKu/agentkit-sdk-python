@@ -21,89 +21,14 @@ from typing import Optional
 import typer
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
-from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.session_create import SANDBOX_TOOL_ID_ENV
-from agentkit.toolkit.cli.sandbox.tool_resolve import (
-    SandboxToolType,
-    resolve_existing_sandbox_tool_id,
-)
+from agentkit.toolkit.cli.sandbox.session_sync import sync_remote_sessions
+from agentkit.toolkit.cli.sandbox.tool_resolve import SandboxToolType
 from agentkit.toolkit.cli.sandbox.utils import (
     echo_json,
     error,
-    find_session_result,
     get_session_result,
-    replace_tool_session_results,
 )
-
-LIST_SESSIONS_PAGE_SIZE = 100
-
-
-def _session_info_to_result(
-    session: tools_types.SessionInfosForListSessions,
-    tool_id: str,
-) -> dict[str, object] | None:
-    session_id = session.user_session_id
-    if not isinstance(session_id, str) or not session_id.strip():
-        return None
-
-    return {
-        "session_id": session_id.strip(),
-        "tool_id": tool_id,
-        "instance_id": session.session_id,
-        "endpoint": session.endpoint,
-    }
-
-
-def _list_all_session_results(
-    client: AgentkitToolsClient,
-    tool_id: str,
-) -> list[dict[str, object]]:
-    results: list[dict[str, object]] = []
-    next_token: Optional[str] = None
-    seen_tokens: set[str] = set()
-
-    while True:
-        response = client.list_sessions(
-            tools_types.ListSessionsRequest(
-                tool_id=tool_id,
-                max_results=LIST_SESSIONS_PAGE_SIZE,
-                next_token=next_token,
-            )
-        )
-        for session in response.session_infos or []:
-            result = _session_info_to_result(session, tool_id)
-            if result:
-                results.append(result)
-
-        next_token = response.next_token or None
-        if not next_token or next_token in seen_tokens:
-            break
-        seen_tokens.add(next_token)
-
-    return results
-
-
-def _sync_remote_sessions(
-    *,
-    session_id: str,
-    tool_id: Optional[str],
-    tool_type: SandboxToolType,
-) -> str | None:
-    existing = find_session_result(session_id)
-    client = AgentkitToolsClient()
-    resolved_tool_id = resolve_existing_sandbox_tool_id(
-        tool_id=tool_id,
-        tool_type=tool_type,
-        default_tool_id=existing.get("tool_id") if existing else None,
-        client=client,
-        env_var_name=SANDBOX_TOOL_ID_ENV,
-    )
-    if not resolved_tool_id:
-        return None
-
-    results = _list_all_session_results(client, resolved_tool_id)
-    replace_tool_session_results(resolved_tool_id, results)
-    return resolved_tool_id
 
 
 def get_command(
@@ -125,10 +50,12 @@ def get_command(
 ) -> None:
     """Get a sandbox session after syncing remote sessions for the current tool."""
     try:
-        resolved_tool_id = _sync_remote_sessions(
+        resolved_tool_id = sync_remote_sessions(
             session_id=session_id,
             tool_id=tool_id,
             tool_type=tool_type,
+            client=AgentkitToolsClient(),
+            env_var_name=SANDBOX_TOOL_ID_ENV,
         )
         result = get_session_result(session_id)
     except typer.Exit:
