@@ -48,6 +48,13 @@ MODEL_BASE_URL_ENV_KEYS = (
     "MODEL_BASE_URL",
 )
 ANTHROPIC_BASE_URL_ENV_KEYS = ("ANTHROPIC_BASE_URL",)
+DISABLED_SERVICE_ENV_KEYS = (
+    "DISABLE_JUPYTER",
+    "DISABLE_CODE_SERVER",
+    "DISABLE_BROWSER",
+    "DISABLE_VNC",
+    "DISABLE_NODEJS_REPL",
+)
 TOOL_READY_STATUS = "Ready"
 TOOL_FAILED_STATUSES = {"Error", "Failed", "CreateFailed", "Deleting", "Deleted"}
 TOOL_WAIT_INTERVAL_SECONDS = 5
@@ -107,6 +114,7 @@ def _build_tool_model_envs(
         ANTHROPIC_BASE_URL_ENV_KEYS,
         resolved_model_base_url or DEFAULT_ANTHROPIC_BASE_URL,
     )
+    _append_tool_envs(envs, DISABLED_SERVICE_ENV_KEYS, "true")
     return envs or None
 
 
