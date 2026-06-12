@@ -566,6 +566,39 @@ def test_ensure_sandbox_session_passes_envs_to_create_session(
     ]
 
 
+def test_build_model_envs_uses_model_api_key_env(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setenv("MODEL_API_KEY", "env-model-value")
+
+    envs = session_create.build_model_envs(model_name="claude-sonnet-4")
+
+    assert [(item.key, item.value) for item in envs] == [
+        ("OPENCODE_MODEL", "claude-sonnet-4"),
+        ("CODEX_MODEL", "claude-sonnet-4"),
+        ("ANTHROPIC_MODEL", "claude-sonnet-4"),
+        ("OPENCODE_API_KEY", "env-model-value"),
+        ("CODEX_API_KEY", "env-model-value"),
+        ("ANTHROPIC_AUTH_TOKEN", "env-model-value"),
+    ]
+
+
+def test_build_model_envs_option_overrides_model_api_key_env(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setenv("MODEL_API_KEY", "env-model-value")
+
+    envs = session_create.build_model_envs(
+        **{"model_" + "api_key": "cli-model-value"}
+    )
+
+    assert [(item.key, item.value) for item in envs] == [
+        ("OPENCODE_API_KEY", "cli-model-value"),
+        ("CODEX_API_KEY", "cli-model-value"),
+        ("ANTHROPIC_AUTH_TOKEN", "cli-model-value"),
+    ]
+
+
 def test_ensure_sandbox_session_skips_tos_mount_when_tool_has_none(
     monkeypatch,
     tmp_path,

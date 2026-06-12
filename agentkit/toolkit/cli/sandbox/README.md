@@ -60,7 +60,8 @@ Options:
 - `--model-name`: optional. Injected into the tool as `OPENCODE_MODEL`,
   `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
 - `--model-api-key`: optional. Injected into the tool as `OPENCODE_API_KEY`,
-  `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`.
+  `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If omitted, the CLI uses
+  `MODEL_API_KEY` when that environment variable is set.
 
 The tool always injects Volcengine Ark compatible endpoints into
 `OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
@@ -198,7 +199,8 @@ Options:
 - `--model-name`: optional. When creating a sandbox session, injects the value
   as `OPENCODE_MODEL`, `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
 - `--model-api-key`: optional. When creating a sandbox session, injects the
-  value as `OPENCODE_API_KEY`, `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`.
+  value as `OPENCODE_API_KEY`, `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If
+  omitted, the CLI uses `MODEL_API_KEY` when that environment variable is set.
 
 The command connects to `<endpoint>/v1/shell/ws`, streams remote output to local
 stdout, forwards local stdin as terminal input, sends terminal resize events, and

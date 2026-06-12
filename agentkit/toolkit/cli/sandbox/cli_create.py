@@ -26,6 +26,7 @@ import typer
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.session_create import (
+    MODEL_API_KEY_ENV,
     MODEL_API_KEY_ENV_KEYS,
     MODEL_NAME_ENV_KEYS,
 )
@@ -109,8 +110,9 @@ def _build_tool_model_envs(
 ) -> list[tools_types.EnvsItemForCreateTool] | None:
     envs: list[tools_types.EnvsItemForCreateTool] = []
     resolved_model_name = (model_name or "").strip() or DEFAULT_MODEL_NAME
+    resolved_model_api_key = model_api_key or os.getenv(MODEL_API_KEY_ENV)
     _append_tool_envs(envs, MODEL_NAME_ENV_KEYS, resolved_model_name)
-    _append_tool_envs(envs, MODEL_API_KEY_ENV_KEYS, model_api_key)
+    _append_tool_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
     _append_tool_envs(
         envs,
         MODEL_BASE_URL_ENV_KEYS,

@@ -364,6 +364,56 @@ def test_build_create_tool_request_adds_model_envs(monkeypatch):
     ]
 
 
+def test_build_create_tool_request_uses_model_api_key_env(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setenv("MODEL_API_KEY", _PLACEHOLDER_MODEL_VALUE)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="SkillEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="cn-beijing",
+    )
+
+    assert ("OPENCODE_API_KEY", _PLACEHOLDER_MODEL_VALUE) in [
+        (item.key, item.value) for item in request.envs
+    ]
+    assert ("CODEX_API_KEY", _PLACEHOLDER_MODEL_VALUE) in [
+        (item.key, item.value) for item in request.envs
+    ]
+    assert ("ANTHROPIC_AUTH_TOKEN", _PLACEHOLDER_MODEL_VALUE) in [
+        (item.key, item.value) for item in request.envs
+    ]
+
+
+def test_build_create_tool_request_model_api_key_option_overrides_env(
+    monkeypatch,
+):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setenv("MODEL_API_KEY", "env-model-value")
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="SkillEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="cn-beijing",
+        **{"model_" + "api_key": _PLACEHOLDER_MODEL_VALUE},
+    )
+
+    assert ("OPENCODE_API_KEY", _PLACEHOLDER_MODEL_VALUE) in [
+        (item.key, item.value) for item in request.envs
+    ]
+    assert ("OPENCODE_API_KEY", "env-model-value") not in [
+        (item.key, item.value) for item in request.envs
+    ]
+
+
 def test_create_command_rejects_model_base_url_option(monkeypatch):
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create

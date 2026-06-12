@@ -46,6 +46,7 @@ MODEL_API_KEY_ENV_KEYS = (
     "CODEX_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
 )
+MODEL_API_KEY_ENV = "MODEL_API_KEY"
 CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 CREATE_SESSION_CONFIRM_ATTEMPTS = 6
 CREATE_SESSION_CONFIRM_INTERVAL_SECONDS = 5
@@ -73,8 +74,9 @@ def build_model_envs(
     model_api_key: Optional[str] = None,
 ) -> list[tools_types.EnvsItemForCreateSession] | None:
     envs: list[tools_types.EnvsItemForCreateSession] = []
+    resolved_model_api_key = model_api_key or os.getenv(MODEL_API_KEY_ENV)
     _append_envs(envs, MODEL_NAME_ENV_KEYS, model_name)
-    _append_envs(envs, MODEL_API_KEY_ENV_KEYS, model_api_key)
+    _append_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
     return envs or None
 
 
