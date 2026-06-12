@@ -285,6 +285,52 @@ def test_ensure_sandbox_session_uses_cached_tool_by_type(
     assert _FakeToolsClient.last_request.tool_id == "tool-from-cache"
 
 
+def test_ensure_sandbox_session_ignores_non_ready_cached_tool(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    tool_store_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_store_path.write_text(
+        json.dumps(
+            {
+                "SkillEnv": {
+                    "ToolId": "tool-from-cache",
+                    "ToolType": "SkillEnv",
+                    "Name": "cached-tool",
+                    "Status": "Error",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    _FakeToolsClient.list_response = _FakeListToolsResponse(
+        [_FakeListTool(tool_id="tool-from-list", tool_type="SkillEnv")]
+    )
+
+    session_create.ensure_sandbox_session(tool_type="SkillEnv")
+
+    assert _FakeToolsClient.list_call_count == 1
+    assert _FakeToolsClient.last_request.tool_id == "tool-from-list"
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "SkillEnv": {
+            "ToolId": "tool-from-list",
+            "Name": "listed-tool",
+            "Status": "Ready",
+            "ToolType": "SkillEnv",
+        }
+    }
+
+
 def test_ensure_sandbox_session_lists_tool_by_type_and_caches_result(
     monkeypatch,
     tmp_path,
@@ -317,6 +363,107 @@ def test_ensure_sandbox_session_lists_tool_by_type_and_caches_result(
             "Name": "listed-tool",
             "Status": "Ready",
             "ToolType": "SkillEnv",
+        }
+    }
+
+
+def test_ensure_sandbox_session_skips_non_ready_listed_tools(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.list_response = _FakeListToolsResponse(
+        [
+            _FakeListTool(
+                tool_id="tool-creating",
+                tool_type="SkillEnv",
+                name="creating-tool",
+                status="Creating",
+            ),
+            _FakeListTool(
+                tool_id="tool-error",
+                tool_type="SkillEnv",
+                name="error-tool",
+                status="Error",
+            ),
+            _FakeListTool(
+                tool_id="tool-ready",
+                tool_type="SkillEnv",
+                name="ready-tool",
+                status="Ready",
+            ),
+        ]
+    )
+
+    session_create.ensure_sandbox_session(tool_type="SkillEnv")
+
+    assert _FakeToolsClient.list_call_count == 1
+    assert _FakeToolsClient.last_request.tool_id == "tool-ready"
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "SkillEnv": {
+            "ToolId": "tool-ready",
+            "Name": "ready-tool",
+            "Status": "Ready",
+            "ToolType": "SkillEnv",
+        }
+    }
+
+
+def test_ensure_sandbox_session_creates_tool_when_listed_tools_not_ready(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.sandbox import cli_create
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.list_response = _FakeListToolsResponse(
+        [
+            _FakeListTool(
+                tool_id="tool-creating",
+                tool_type="CodeEnv",
+                name="creating-tool",
+                status="Creating",
+            )
+        ]
+    )
+
+    def fake_create_tool(tool_type="CodeEnv", **_kwargs):
+        return {
+            "tool_id": "tool-from-create",
+            "tool_type": tool_type,
+            "name": "created-tool",
+            "status": "Ready",
+        }
+
+    monkeypatch.setattr(cli_create, "create_tool", fake_create_tool)
+
+    session_create.ensure_sandbox_session(tool_type="CodeEnv")
+
+    assert _FakeToolsClient.list_call_count == 1
+    assert _FakeToolsClient.last_request.tool_id == "tool-from-create"
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "CodeEnv": {
+            "ToolId": "tool-from-create",
+            "Name": "created-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
         }
     }
 

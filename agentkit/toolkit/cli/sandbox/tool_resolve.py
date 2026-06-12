@@ -29,6 +29,7 @@ from agentkit.toolkit.cli.sandbox.utils import error
 SANDBOX_TOOL_STORE_PATH = Path(".agentkit") / "sandbox" / "tools.json"
 DEFAULT_SANDBOX_TOOL_TYPE = "CodeEnv"
 VALID_SANDBOX_TOOL_TYPES = ("CodeEnv", "SkillEnv")
+READY_TOOL_STATUS = "Ready"
 
 
 class SandboxToolType(str, Enum):
@@ -87,6 +88,10 @@ def _get_string_value(result: dict[str, object], *keys: str) -> str | None:
     return None
 
 
+def _is_ready_tool_record(result: dict[str, object]) -> bool:
+    return _get_string_value(result, "Status", "status") == READY_TOOL_STATUS
+
+
 def _normalize_tool_record(
     tool_type: str,
     result: dict[str, object],
@@ -139,7 +144,7 @@ def _get_cached_tool_id(tool_type: str) -> str | None:
         return None
 
     tool_id = _get_string_value(result, "ToolId", "tool_id")
-    if tool_id:
+    if tool_id and _is_ready_tool_record(result):
         return tool_id
     return None
 
@@ -159,7 +164,7 @@ def _list_first_tool(
     response = client.list_tools(request)
     for tool in response.tools or []:
         record = _build_tool_record(tool, tool_type)
-        if not record:
+        if not record or not _is_ready_tool_record(record):
             continue
         save_tool_result(tool_type, record)
         tool_id = record["ToolId"]

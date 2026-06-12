@@ -246,6 +246,9 @@ When `--tool-id` and `AGENTKIT_SANDBOX_TOOL_ID` are both omitted,
 2. `ListTools` filtered by `ToolType`
 3. automatic `agentkit sandbox create --tool-type <type>`-equivalent creation
 
+Cached and listed tools are reused only when their status is `Ready`; tools in
+states such as `Creating`, `Error`, `Deleting`, or `Deleted` are ignored.
+
 Resolved tool records are stored in:
 
 ```text
