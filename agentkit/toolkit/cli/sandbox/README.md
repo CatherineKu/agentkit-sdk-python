@@ -94,16 +94,19 @@ that type's record.
 
 ### Get
 
-Sync sessions for the current tool, then read a sandbox session from the local
+Sync sessions for the current tool, then read sandbox sessions from the local
 session store.
 
 ```bash
 agentkit sandbox get --session-id 123456789
+agentkit sandbox get
 ```
 
 Options:
 
-- `--session-id`: required. Sandbox session ID to look up.
+- `--session-id`: optional. Sandbox session ID to look up. If omitted, the CLI
+  returns all records from `.agentkit/sandbox/sessions.json` after syncing the
+  current tool.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
   set, the CLI resolves an existing tool by `--tool-type`.
 - `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
@@ -114,7 +117,20 @@ Before returning, `get` calls `ListSessions` for the resolved tool and follows
 `NextToken` until all pages are loaded. The returned remote sessions replace
 the same tool's records in `.agentkit/sandbox/sessions.json`; records for other
 tools are preserved. Sessions whose `UserSessionId` is empty are ignored because
-they were not created through this CLI's session flow.
+they were not created through this CLI's session flow. When `--session-id` is
+omitted and no existing tool can be resolved, the command skips remote sync and
+returns the current local store, or `{}` if the store does not exist.
+
+When `--session-id` is provided but the session is not found after sync, the
+command exits with status `1` and returns structured JSON:
+
+```json
+{
+  "tool_id": "t-example",
+  "session_id": "123456789",
+  "error_msg": "Sandbox session not found: 123456789"
+}
+```
 
 ### Shell
 

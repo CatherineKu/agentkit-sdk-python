@@ -311,6 +311,15 @@ def get_session_result(session_id: str) -> dict[str, object]:
         return _normalize_session_record(result)
 
 
+def get_all_session_results() -> dict[str, object]:
+    path = _get_session_store_path()
+    with _locked_session_store(path):
+        if not path.exists():
+            return {}
+        data = load_session_store(path)
+        return _normalize_session_store(data)
+
+
 def find_session_result(session_id: str) -> dict[str, object] | None:
     path = _get_session_store_path()
     if not path.exists():

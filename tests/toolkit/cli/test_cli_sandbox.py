@@ -1080,13 +1080,92 @@ def test_cli_get_ignores_remote_sessions_without_user_session_id(
     assert json.loads(result.output) == stored["user-1"]
 
 
-def test_cli_get_requires_session_id() -> None:
+def test_cli_get_without_session_id_returns_all_synced_sessions(
+    monkeypatch,
+    tmp_path,
+) -> None:
     from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_get as cli_get
+
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    store_path.write_text(
+        json.dumps(
+            {
+                "local-other": {
+                    "session_id": "local-other",
+                    "tool_id": "other-tool",
+                    "instance_id": "local-instance",
+                    "endpoint": "https://local.example.com",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        cli_get,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="remote-user-1",
+                    session_id="remote-instance-1",
+                    endpoint="https://one.example.com",
+                ),
+                _FakeSessionInfo(
+                    user_session_id="",
+                    session_id="ignored-instance",
+                    endpoint="https://ignored.example.com",
+                ),
+            ]
+        )
+    ]
+
+    result = runner.invoke(app, ["sandbox", "get", "--tool-id", "tool-1"])
+
+    assert result.exit_code == 0
+    expected = {
+        "local-other": {
+            "session_id": "local-other",
+            "tool_id": "other-tool",
+            "instance_id": "local-instance",
+            "endpoint": "https://local.example.com",
+        },
+        "remote-user-1": {
+            "session_id": "remote-user-1",
+            "tool_id": "tool-1",
+            "instance_id": "remote-instance-1",
+            "endpoint": "https://one.example.com",
+        },
+    }
+    assert json.loads(result.output) == expected
+    assert json.loads(store_path.read_text(encoding="utf-8")) == expected
+    assert _FakeToolsClient.list_sessions_call_count == 1
+
+
+def test_cli_get_without_session_id_returns_empty_store(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_get as cli_get
+
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        cli_get,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _FakeToolsClient.list_response = _FakeListToolsResponse()
 
     result = runner.invoke(app, ["sandbox", "get"])
 
-    assert result.exit_code != 0
-    assert "--session-id" in result.output
+    assert result.exit_code == 0
+    assert json.loads(result.output) == {}
+    assert _FakeToolsClient.list_sessions_call_count == 0
 
 
 def test_cli_get_reports_missing_session(monkeypatch, tmp_path) -> None:
@@ -1094,6 +1173,7 @@ def test_cli_get_reports_missing_session(monkeypatch, tmp_path) -> None:
     import agentkit.toolkit.cli.sandbox.cli_get as cli_get
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
     store_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(
         cli_get,
@@ -1107,7 +1187,46 @@ def test_cli_get_reports_missing_session(monkeypatch, tmp_path) -> None:
     )
 
     assert result.exit_code == 1
-    assert "Sandbox session not found: missing-user" in result.output
+    assert json.loads(result.output) == {
+        "tool_id": None,
+        "session_id": "missing-user",
+        "error_msg": "Sandbox session not found: missing-user",
+    }
+
+
+def test_cli_get_missing_session_includes_resolved_tool_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_get as cli_get
+
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    store_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        cli_get,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "get",
+            "--session-id",
+            "missing-user",
+            "--tool-id",
+            "tool-1",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert json.loads(result.output) == {
+        "tool_id": "tool-1",
+        "session_id": "missing-user",
+        "error_msg": "Sandbox session not found: missing-user",
+    }
 
 
 def test_cli_shell_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:

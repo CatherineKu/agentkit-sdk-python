@@ -27,15 +27,31 @@ from agentkit.toolkit.cli.sandbox.tool_resolve import SandboxToolType
 from agentkit.toolkit.cli.sandbox.utils import (
     echo_json,
     error,
-    get_session_result,
+    find_session_result,
+    get_all_session_results,
 )
 
 
+def _session_not_found_result(
+    *,
+    session_id: str,
+    tool_id: object,
+) -> dict[str, object]:
+    return {
+        "tool_id": tool_id,
+        "session_id": session_id,
+        "error_msg": f"Sandbox session not found: {session_id}",
+    }
+
+
 def get_command(
-    session_id: str = typer.Option(
-        ...,
+    session_id: Optional[str] = typer.Option(
+        None,
         "--session-id",
-        help="Sandbox session ID to look up.",
+        help=(
+            "Sandbox session ID to look up. Omit to return all local "
+            "sandbox sessions after syncing the current tool."
+        ),
     ),
     tool_id: Optional[str] = typer.Option(
         None,
@@ -57,13 +73,34 @@ def get_command(
             client=AgentkitToolsClient(),
             env_var_name=SANDBOX_TOOL_ID_ENV,
         )
-        result = get_session_result(session_id)
+        result = find_session_result(session_id) if session_id else None
+        if not session_id:
+            result = get_all_session_results()
     except typer.Exit:
         raise
     except Exception as exc:
         error(str(exc))
 
-    if resolved_tool_id and result.get("tool_id") != resolved_tool_id:
-        error(f"Sandbox session not found: {session_id}")
+    if session_id and result is None:
+        echo_json(
+            _session_not_found_result(
+                session_id=session_id,
+                tool_id=resolved_tool_id or tool_id,
+            )
+        )
+        raise typer.Exit(1)
+
+    if (
+        session_id
+        and resolved_tool_id
+        and result.get("tool_id") != resolved_tool_id
+    ):
+        echo_json(
+            _session_not_found_result(
+                session_id=session_id,
+                tool_id=resolved_tool_id,
+            )
+        )
+        raise typer.Exit(1)
 
     echo_json(result)

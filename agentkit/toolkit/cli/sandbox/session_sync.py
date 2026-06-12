@@ -79,13 +79,13 @@ def list_all_session_results(
 
 def sync_remote_sessions(
     *,
-    session_id: str,
+    session_id: str | None,
     tool_id: Optional[str],
     tool_type: str | SandboxToolType | None,
     client: AgentkitToolsClient,
     env_var_name: str,
 ) -> str | None:
-    existing = find_session_result(session_id)
+    existing = find_session_result(session_id) if session_id else None
     resolved_tool_id = resolve_existing_sandbox_tool_id(
         tool_id=tool_id,
         tool_type=tool_type,
