@@ -136,17 +136,9 @@ command exits with status `1` and returns structured JSON:
 
 ### File
 
-Upload, download, and list files in an existing sandbox session.
-
-```bash
-agentkit sandbox file list \
-  --session-id 123456789 \
-  --workspace /home/gem
-```
-
-The file commands operate on an existing session. They sync remote sessions for
-the resolved tool and then look up the given `--session-id`; they do not create a
-new sandbox session when the ID is missing.
+Upload, download, and list files in an existing sandbox session. File commands
+only operate on existing sessions; they do not create a session when
+`--session-id` is missing.
 
 Common options:
 
@@ -154,17 +146,26 @@ Common options:
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
   set, the CLI resolves an existing tool by `--tool-type`.
 - `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
-- `--workspace`: optional absolute sandbox path used as the path resolution root.
+- `--workspace`: optional absolute sandbox path used as the root for relative
+  sandbox paths.
 
 Path rules:
 
-- `--workspace` is optional. If provided, it must be an absolute sandbox path.
-- Relative sandbox paths require `--workspace` and are resolved inside it.
-- Absolute sandbox paths are accepted without `--workspace`.
-- If both `--workspace` and an absolute sandbox path are provided, that absolute
-  path must be inside `--workspace`.
-- `file list` defaults to listing `--workspace` when it is provided, otherwise
-  `/`, if `--sandbox-dir` is omitted.
+- Local paths are normal local filesystem paths.
+- Sandbox paths may be absolute, or relative to `--workspace`.
+- Relative sandbox paths require `--workspace`.
+- Absolute sandbox paths must stay inside `--workspace` when both are provided.
+
+#### Upload
+
+Upload local files:
+
+```bash
+agentkit sandbox file upload \
+  --session-id 123456789 \
+  --dst-dir /tmp/files \
+  ./a.txt ./b.txt
+```
 
 Upload a local directory:
 
@@ -172,79 +173,70 @@ Upload a local directory:
 agentkit sandbox file upload \
   --session-id 123456789 \
   --workspace /home/gem \
-  --upload-dir ./project \
+  --src-dir ./project \
   --dst-dir uploads/project
-```
-
-Upload one or more local files:
-
-```bash
-agentkit sandbox file upload \
-  --session-id 123456789 \
-  --upload-file ./a.txt ./b.txt \
-  --dst-dir /tmp/files
 ```
 
 Upload options:
 
-- `--upload-dir`: local directory whose contents are uploaded. Use at most once.
-- `--upload-file FILE...`: one or more local files to upload.
-- `--dst-dir`: required sandbox destination directory. Relative paths require
-  `--workspace`. The destination directory is created if it does not exist.
+- `FILE...`: local regular files to upload.
+- `--src-dir`: local directory to upload recursively. Uploads the directory
+  contents; it does not add the directory name as a top-level path.
+- `--dst-dir`: required sandbox destination directory. Created if missing.
 
-`--upload-dir` and `--upload-file` are mutually exclusive. Multiple
-`--upload-file` values must not share the same base file name, because they are
-extracted into the same destination directory.
+Use exactly one source form: `FILE...` or `--src-dir`. Multiple `FILE` values
+must not share the same base name because they are extracted into `--dst-dir`.
+
+#### Download
+
+Download sandbox files:
+
+```bash
+agentkit sandbox file download \
+  --session-id 123456789 \
+  --workspace /home/gem \
+  --dst-dir ./downloads \
+  uploads/a.txt uploads/b.txt
+```
 
 Download a sandbox directory:
 
 ```bash
 agentkit sandbox file download \
   --session-id 123456789 \
-  --sandbox-dir /tmp/project \
-  --download-dir ./project-copy
-```
-
-Download one or more sandbox files:
-
-```bash
-agentkit sandbox file download \
-  --session-id 123456789 \
-  --workspace /home/gem \
-  --sandbox-file uploads/a.txt uploads/b.txt \
-  --download-dir ./downloads
+  --src-dir /tmp/project \
+  --dst-dir ./project-copy
 ```
 
 Download options:
 
-- `--sandbox-dir`: sandbox directory whose contents are downloaded.
-- `--sandbox-file FILE...`: one or more sandbox files to download.
-- `--download-dir`: required local directory where downloaded contents are
-  extracted. The directory is created if it does not exist.
-- `--overwrite`: optional. Overwrite existing local files while extracting.
+- `FILE...`: sandbox regular files to download.
+- `--src-dir`: sandbox directory to download recursively. Downloads the
+  directory contents; it does not add the directory name as a top-level path.
+- `--dst-dir`: required local directory. Created if missing.
+- `--overwrite`: overwrite existing local files while extracting.
 
-`--sandbox-dir` and `--sandbox-file` are mutually exclusive. Multiple
-`--sandbox-file` values must not share the same base file name, because they are
-extracted into the same local directory. Download extraction rejects unsafe tar
-members, absolute paths, `..` traversal, and links.
+Use exactly one source form: `FILE...` or `--src-dir`. Multiple `FILE` values
+must not share the same base name because they are extracted into `--dst-dir`.
+Downloaded archive members must be relative regular files or directories; links,
+absolute paths, and `..` traversal are rejected.
 
-List files:
+#### List
+
+List a sandbox path:
 
 ```bash
 agentkit sandbox file list \
   --session-id 123456789 \
-  --sandbox-dir /tmp/project \
-  --recursive \
-  --max-depth 2
+  /tmp/project
 ```
 
-List options:
+List arguments and options:
 
-- `--sandbox-dir`: sandbox directory to list. Defaults to `--workspace`, or `/`
-  when `--workspace` is omitted.
-- `--recursive/--no-recursive`: list recursively; defaults to recursive.
-- `--show-hidden/--hide-hidden`: include hidden files; defaults to show hidden.
-- `--max-depth`: optional maximum recursive listing depth. Must be non-negative.
+- `PATH`: required sandbox path to list. Relative paths require `--workspace`.
+- `--recursive/--no-recursive`: list recursively. Defaults to no recursive.
+- `--show-hidden/--hide-hidden`: include hidden files. Defaults to hide hidden.
+- `--max-depth`: maximum recursive listing depth. Must be non-negative.
 - `--include-size/--no-include-size`: include file size metadata; defaults to
   include size.
 - `--include-permissions`: include file permission metadata.

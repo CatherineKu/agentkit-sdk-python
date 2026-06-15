@@ -314,39 +314,34 @@ def _strings_or_empty(values: Optional[list[str]]) -> list[str]:
 
 def _validate_upload_inputs(
     upload_dir: Optional[list[Path]],
-    upload_file: bool,
     upload_files: Optional[list[Path]],
 ) -> tuple[Path | None, list[Path]]:
     dirs = _paths_or_empty(upload_dir)
     files = _paths_or_empty(upload_files)
-    if files and not upload_file:
-        error("File arguments require --upload-file")
-    if dirs and upload_file:
-        error("Use either --upload-dir or --upload-file, not both")
-    if upload_file and not files:
-        error("Provide one or more files after --upload-file")
-    if not dirs and not upload_file:
-        error("Provide --upload-dir or --upload-file")
+    if dirs and files:
+        error("Use either --src-dir or FILE..., not both")
+    if not dirs and not files:
+        error("Provide --src-dir or one or more FILE arguments")
     if len(dirs) > 1:
-        error("--upload-dir accepts one directory")
+        error("--src-dir accepts one directory")
 
     if dirs:
         directory = dirs[0]
         if not directory.exists():
-            error(f"Upload directory not found: {directory}")
+            error(f"Source directory not found: {directory}")
         if not directory.is_dir():
-            error(f"Upload path is not a directory: {directory}")
+            error(f"Source path is not a directory: {directory}")
         return directory, []
 
     seen_names: set[str] = set()
     resolved_files = []
     for file_path in files:
         if not file_path.exists():
-            error(f"Upload file not found: {file_path}")
+            error(f"Source file not found: {file_path}")
         if not file_path.is_file():
-            error(f"Upload path is not a file: {file_path}")
+            error(f"Source path is not a file: {file_path}")
         if file_path.name in seen_names:
-            error(f"Duplicate upload file name: {file_path.name}")
+            error(f"Duplicate source file name: {file_path.name}")
         seen_names.add(file_path.name)
         resolved_files.append(file_path)
     return None, resolved_files
@@ -397,21 +392,16 @@ def _build_remote_extract_command(
 
 def _validate_download_inputs(
     sandbox_dir: Optional[str],
-    sandbox_file: bool,
     sandbox_files: Optional[list[str]],
     *,
     workspace: str | None,
 ) -> tuple[str, list[str]]:
     files = _strings_or_empty(sandbox_files)
     has_dir = bool((sandbox_dir or "").strip())
-    if files and not sandbox_file:
-        error("File arguments require --sandbox-file")
-    if has_dir and sandbox_file:
-        error("Use either --sandbox-dir or --sandbox-file, not both")
-    if sandbox_file and not files:
-        error("Provide one or more files after --sandbox-file")
-    if not has_dir and not sandbox_file:
-        error("Provide --sandbox-dir or --sandbox-file")
+    if has_dir and files:
+        error("Use either --src-dir or FILE..., not both")
+    if not has_dir and not files:
+        error("Provide --src-dir or one or more FILE arguments")
 
     if has_dir:
         return (
@@ -420,7 +410,7 @@ def _validate_download_inputs(
                 _resolve_sandbox_path(
                     sandbox_dir,
                     workspace=workspace,
-                    option_name="--sandbox-dir",
+                    option_name="--src-dir",
                 )
             ],
         )
@@ -429,7 +419,7 @@ def _validate_download_inputs(
         _resolve_sandbox_path(
             file_path,
             workspace=workspace,
-            option_name="--sandbox-file",
+            option_name="FILE",
         )
         for file_path in files
     ]
@@ -437,9 +427,9 @@ def _validate_download_inputs(
     for file_path in resolved_files:
         name = posixpath.basename(file_path)
         if not name:
-            error(f"Invalid --sandbox-file path: {file_path}")
+            error(f"Invalid FILE path: {file_path}")
         if name in seen_names:
-            error(f"Duplicate sandbox file name: {name}")
+            error(f"Duplicate source file name: {name}")
         seen_names.add(name)
     return "files", resolved_files
 
@@ -469,6 +459,33 @@ def _build_remote_archive_command(
         f"status=$?; [ $status -eq 0 ] || rm -f {quoted_archive}; "
         f"[ $status -eq 0 ]"
     )
+
+
+def _build_remote_source_validation_command(
+    *,
+    source_mode: str,
+    sources: list[str],
+) -> str:
+    commands = []
+    for source in sources:
+        quoted_source = shlex.quote(source)
+        if source_mode == "directory":
+            commands.append(
+                f"if ! test -e {quoted_source}; then "
+                f"echo {shlex.quote(f'Source directory not found: {source}')}; "
+                f"false; elif ! test -d {quoted_source}; then "
+                f"echo {shlex.quote(f'Source path is not a directory: {source}')}; "
+                "false; else true; fi"
+            )
+        else:
+            commands.append(
+                f"if ! test -e {quoted_source}; then "
+                f"echo {shlex.quote(f'Source file not found: {source}')}; "
+                f"false; elif ! test -f {quoted_source}; then "
+                f"echo {shlex.quote(f'Source path is not a file: {source}')}; "
+                "false; else true; fi"
+            )
+    return " && ".join(commands)
 
 
 def _validate_local_download_dir(download_dir: Path) -> Path:
@@ -554,21 +571,16 @@ def file_upload_command(
     ),
     upload_dir: Optional[list[Path]] = typer.Option(
         None,
-        "--upload-dir",
+        "--src-dir",
         help=(
             "Local directory whose contents are uploaded. May be used once. "
-            "Use --upload-file for single or multiple files."
+            "Use FILE... for single or multiple files."
         ),
-    ),
-    upload_file: bool = typer.Option(
-        False,
-        "--upload-file",
-        help="Upload one or more local files listed as FILE... arguments.",
     ),
     files: Optional[list[Path]] = typer.Argument(
         None,
         metavar="FILE...",
-        help="Local files used with --upload-file.",
+        help="Local files to upload.",
     ),
     dst_dir: str = typer.Option(
         ...,
@@ -599,7 +611,6 @@ def file_upload_command(
         )
         resolved_upload_dir, resolved_upload_files = _validate_upload_inputs(
             upload_dir,
-            upload_file,
             files,
         )
         session = _resolve_existing_session(
@@ -659,28 +670,23 @@ def file_download_command(
         None,
         "--workspace",
         help=(
-            "Optional sandbox workspace root. Relative --sandbox-dir and "
-            "--sandbox-file values are resolved inside this directory."
+            "Optional sandbox workspace root. Relative --src-dir and FILE "
+            "values are resolved inside this directory."
         ),
     ),
     sandbox_dir: Optional[str] = typer.Option(
         None,
-        "--sandbox-dir",
+        "--src-dir",
         help="Sandbox directory whose contents are downloaded.",
-    ),
-    sandbox_file: bool = typer.Option(
-        False,
-        "--sandbox-file",
-        help="Download one or more sandbox files listed as FILE... arguments.",
     ),
     files: Optional[list[str]] = typer.Argument(
         None,
         metavar="FILE...",
-        help="Sandbox files used with --sandbox-file.",
+        help="Sandbox files to download.",
     ),
-    download_dir: Path = typer.Option(
+    dst_dir: Path = typer.Option(
         ...,
-        "--download-dir",
+        "--dst-dir",
         help="Local directory where downloaded contents are extracted.",
     ),
     overwrite: bool = typer.Option(
@@ -705,15 +711,21 @@ def file_download_command(
         resolved_workspace = _normalize_workspace(workspace)
         source_mode, sources = _validate_download_inputs(
             sandbox_dir,
-            sandbox_file,
             files,
             workspace=resolved_workspace,
         )
-        resolved_download_dir = _validate_local_download_dir(download_dir)
+        resolved_download_dir = _validate_local_download_dir(dst_dir)
         session = _resolve_existing_session(
             session_id=session_id,
             tool_id=tool_id,
             tool_type=tool_type,
+        )
+        _exec_shell_command(
+            session,
+            _build_remote_source_validation_command(
+                source_mode=source_mode,
+                sources=sources,
+            ),
         )
         remote_archive_path = _new_remote_archive_path("agentkit-download")
         _exec_shell_command(
@@ -758,7 +770,7 @@ def file_download_command(
         {
             "session_id": session_id,
             "workspace": resolved_workspace,
-            "download_dir": str(resolved_download_dir),
+            "dst_dir": str(resolved_download_dir),
             "sources": sources,
         }
     )
@@ -774,25 +786,22 @@ def file_list_command(
         None,
         "--workspace",
         help=(
-            "Optional sandbox workspace root. Defaults to listing this root "
-            "when --sandbox-dir is omitted."
+            "Optional sandbox workspace root. Relative PATH values are "
+            "resolved inside it."
         ),
     ),
-    sandbox_dir: Optional[str] = typer.Option(
-        None,
-        "--sandbox-dir",
-        help=(
-            "Sandbox directory to list. Relative paths require --workspace. "
-            "Defaults to --workspace, or / when --workspace is omitted."
-        ),
+    path: str = typer.Argument(
+        ...,
+        metavar="PATH",
+        help="Sandbox path to list. Relative paths require --workspace.",
     ),
     recursive: bool = typer.Option(
-        True,
+        False,
         "--recursive/--no-recursive",
         help="List files recursively.",
     ),
     show_hidden: bool = typer.Option(
-        True,
+        False,
         "--show-hidden/--hide-hidden",
         help="Include hidden files.",
     ),
@@ -841,10 +850,9 @@ def file_list_command(
 
         resolved_workspace = _normalize_workspace(workspace)
         resolved_sandbox_dir = _resolve_sandbox_path(
-            sandbox_dir,
+            path,
             workspace=resolved_workspace,
-            option_name="--sandbox-dir",
-            default_without_workspace="/",
+            option_name="PATH",
         )
         session = _resolve_existing_session(
             session_id=session_id,

@@ -152,7 +152,7 @@ def test_cli_file_upload_directory_creates_destination_and_extracts_archive(
             "user-1",
             "--workspace",
             "/home/gem",
-            "--upload-dir",
+            "--src-dir",
             str(source_dir),
             "--dst-dir",
             "workspace/project",
@@ -208,7 +208,6 @@ def test_cli_file_upload_multiple_files_without_workspace(
             "upload",
             "--session-id",
             "user-1",
-            "--upload-file",
             str(first),
             str(second),
             "--dst-dir",
@@ -226,34 +225,30 @@ def test_cli_file_upload_multiple_files_without_workspace(
     [
         (
             ["--workspace", "/home/gem", "--dst-dir", "out"],
-            "Provide --upload-dir or --upload-file",
-        ),
-        (
-            ["--upload-file", "--dst-dir", "/tmp/out"],
-            "Provide one or more files after --upload-file",
+            "Provide --src-dir or one or more FILE arguments",
         ),
         (
             ["orphan.txt", "--dst-dir", "/tmp/out"],
-            "File arguments require --upload-file",
+            "Source file not found",
         ),
         (
-            ["--upload-dir", "missing", "--dst-dir", "/tmp/out"],
-            "Upload directory not found",
+            ["--src-dir", "missing", "--dst-dir", "/tmp/out"],
+            "Source directory not found",
         ),
         (
-            ["--upload-file", "missing.txt", "--dst-dir", "/tmp/out"],
-            "Upload file not found",
+            ["missing.txt", "--dst-dir", "/tmp/out"],
+            "Source file not found",
         ),
         (
-            ["--upload-dir", ".", "--upload-file", "x.py", "--dst-dir", "/tmp/out"],
-            "Use either --upload-dir or --upload-file",
+            ["--src-dir", ".", "x.py", "--dst-dir", "/tmp/out"],
+            "Use either --src-dir or FILE..., not both",
         ),
         (
-            ["--upload-dir", ".", "--upload-dir", ".", "--dst-dir", "/tmp/out"],
-            "--upload-dir accepts one directory",
+            ["--src-dir", ".", "--src-dir", ".", "--dst-dir", "/tmp/out"],
+            "--src-dir accepts one directory",
         ),
         (
-            ["--upload-dir", ".", "--dst-dir", "relative"],
+            ["--src-dir", ".", "--dst-dir", "relative"],
             "--dst-dir must be absolute when --workspace is omitted",
         ),
     ],
@@ -296,14 +291,14 @@ def test_cli_file_upload_validates_file_and_directory_shapes(
             "upload",
             "--session-id",
             "user-1",
-            "--upload-dir",
+            "--src-dir",
             str(regular_file),
             "--dst-dir",
             "/tmp/out",
         ],
     )
     assert result.exit_code == 1
-    assert "Upload path is not a directory" in result.output
+    assert "Source path is not a directory" in result.output
 
     result = runner.invoke(
         app,
@@ -313,14 +308,13 @@ def test_cli_file_upload_validates_file_and_directory_shapes(
             "upload",
             "--session-id",
             "user-1",
-            "--upload-file",
             str(directory),
             "--dst-dir",
             "/tmp/out",
         ],
     )
     assert result.exit_code == 1
-    assert "Upload path is not a file" in result.output
+    assert "Source path is not a file" in result.output
 
 
 def test_cli_file_upload_rejects_duplicate_file_names(monkeypatch, tmp_path) -> None:
@@ -344,7 +338,6 @@ def test_cli_file_upload_rejects_duplicate_file_names(monkeypatch, tmp_path) -> 
             "upload",
             "--session-id",
             "user-1",
-            "--upload-file",
             str(first),
             str(second),
             "--dst-dir",
@@ -353,7 +346,7 @@ def test_cli_file_upload_rejects_duplicate_file_names(monkeypatch, tmp_path) -> 
     )
 
     assert result.exit_code == 1
-    assert "Duplicate upload file name: same.txt" in result.output
+    assert "Duplicate source file name: same.txt" in result.output
 
 
 def test_cli_file_upload_reports_http_error(monkeypatch, tmp_path) -> None:
@@ -384,7 +377,6 @@ def test_cli_file_upload_reports_http_error(monkeypatch, tmp_path) -> None:
             "upload",
             "--session-id",
             "user-1",
-            "--upload-file",
             str(source_file),
             "--dst-dir",
             "/tmp/files",
@@ -417,7 +409,6 @@ def test_cli_file_upload_reports_request_exception(monkeypatch, tmp_path) -> Non
             "upload",
             "--session-id",
             "user-1",
-            "--upload-file",
             str(source_file),
             "--dst-dir",
             "/tmp/files",
@@ -450,7 +441,6 @@ def test_cli_file_upload_reports_unexpected_exception(monkeypatch, tmp_path) -> 
             "upload",
             "--session-id",
             "user-1",
-            "--upload-file",
             str(source_file),
             "--dst-dir",
             "/tmp/files",
@@ -497,9 +487,9 @@ def test_cli_file_download_directory_extracts_archive_and_cleans_remote(
             "user-1",
             "--workspace",
             "/home/gem",
-            "--sandbox-dir",
+            "--src-dir",
             "project",
-            "--download-dir",
+            "--dst-dir",
             str(download_dir),
         ],
     )
@@ -509,10 +499,14 @@ def test_cli_file_download_directory_extracts_archive_and_cleans_remote(
         "print('hi')\n"
     )
     assert (download_dir / "empty").is_dir()
-    assert "tar -cf /tmp/agentkit-download-" in commands[0]
-    assert "-C /home/gem/project ." in commands[0]
-    assert "exit " not in commands[0]
-    assert commands[1].startswith("rm -f /tmp/agentkit-download-")
+    assert "test -e /home/gem/project" in commands[0]
+    assert "test -d /home/gem/project" in commands[0]
+    assert "tar -cf /tmp/agentkit-download-" in commands[1]
+    assert "-C /home/gem/project ." in commands[1]
+    assert "exit " not in commands[1]
+    assert commands[2].startswith("rm -f /tmp/agentkit-download-")
+    output = json.loads(result.output)
+    assert output["dst_dir"] == str(download_dir)
 
 
 def test_cli_file_download_multiple_files_without_workspace(
@@ -547,10 +541,9 @@ def test_cli_file_download_multiple_files_without_workspace(
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
             "/var/log/two.txt",
-            "--download-dir",
+            "--dst-dir",
             str(download_dir),
         ],
     )
@@ -558,48 +551,105 @@ def test_cli_file_download_multiple_files_without_workspace(
     assert result.exit_code == 0
     assert (download_dir / "one.txt").read_text(encoding="utf-8") == "one"
     assert (download_dir / "two.txt").read_text(encoding="utf-8") == "two"
-    assert "-C /tmp one.txt" in commands[0]
-    assert "-C /var/log two.txt" in commands[0]
+    assert "test -f /tmp/one.txt" in commands[0]
+    assert "test -f /var/log/two.txt" in commands[0]
+    assert "-C /tmp one.txt" in commands[1]
+    assert "-C /var/log two.txt" in commands[1]
 
 
 @pytest.mark.parametrize(
     ("args", "message"),
     [
         (
-            ["--sandbox-dir", "project", "--sandbox-file", "one.txt"],
-            "Use either --sandbox-dir or --sandbox-file",
+            ["/tmp/project"],
+            "Source path is not a file: /tmp/project",
+        ),
+        (
+            ["--src-dir", "/tmp/one.txt"],
+            "Source path is not a directory: /tmp/one.txt",
+        ),
+    ],
+)
+def test_cli_file_download_validates_remote_source_shape(
+    monkeypatch,
+    tmp_path,
+    args,
+    message,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_file as cli_file
+
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_session_resolution(monkeypatch, cli_file)
+
+    def fake_post(_url, **kwargs):
+        command = kwargs["json"]["command"]
+        if "test -f /tmp/project" in command or "test -d /tmp/one.txt" in command:
+            return _FakeResponse(
+                payload={
+                    "success": True,
+                    "data": {
+                        "exit_code": 1,
+                        "output": message,
+                    },
+                }
+            )
+        return _FakeResponse(payload={"success": True, "data": {"exit_code": 0}})
+
+    monkeypatch.setattr(cli_file.requests, "post", fake_post)
+    monkeypatch.setattr(
+        cli_file.requests,
+        "get",
+        lambda *_args, **_kwargs: pytest.fail("download should not start"),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "file",
+            "download",
+            "--session-id",
+            "user-1",
+            "--dst-dir",
+            str(tmp_path / "download"),
+            *args,
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert message in result.output
+
+
+@pytest.mark.parametrize(
+    ("args", "message"),
+    [
+        (
+            ["--src-dir", "project", "one.txt"],
+            "Use either --src-dir or FILE..., not both",
         ),
         (
             [],
-            "Provide --sandbox-dir or --sandbox-file",
+            "Provide --src-dir or one or more FILE arguments",
         ),
         (
-            ["--sandbox-file"],
-            "Provide one or more files after --sandbox-file",
-        ),
-        (
-            ["/tmp/orphan.txt"],
-            "File arguments require --sandbox-file",
-        ),
-        (
-            ["--sandbox-file", "relative.txt"],
-            "--sandbox-file must be absolute when --workspace is omitted",
+            ["relative.txt"],
+            "FILE must be absolute when --workspace is omitted",
         ),
         (
             [
-                "--sandbox-file",
                 "/tmp/one.txt",
                 "/var/one.txt",
             ],
-            "Duplicate sandbox file name: one.txt",
+            "Duplicate source file name: one.txt",
         ),
         (
-            ["--workspace", "/home/gem", "--sandbox-file", "/tmp/one.txt"],
-            "--sandbox-file must be inside --workspace",
+            ["--workspace", "/home/gem", "/tmp/one.txt"],
+            "FILE must be inside --workspace",
         ),
         (
-            ["--sandbox-file", "/"],
-            "Invalid --sandbox-file path: /",
+            ["/"],
+            "Invalid FILE path: /",
         ),
     ],
 )
@@ -623,7 +673,7 @@ def test_cli_file_download_validates_inputs(
             "download",
             "--session-id",
             "user-1",
-            "--download-dir",
+            "--dst-dir",
             str(tmp_path / "out"),
             *args,
         ],
@@ -650,9 +700,8 @@ def test_cli_file_download_rejects_file_download_dir(monkeypatch, tmp_path) -> N
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(download_path),
         ],
     )
@@ -694,9 +743,9 @@ def test_cli_file_download_rejects_unsafe_archive_member(
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-dir",
+            "--src-dir",
             "/tmp/project",
-            "--download-dir",
+            "--dst-dir",
             str(download_dir),
         ],
     )
@@ -739,9 +788,9 @@ def test_cli_file_download_rejects_archive_links(monkeypatch, tmp_path) -> None:
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-dir",
+            "--src-dir",
             "/tmp/project",
-            "--download-dir",
+            "--dst-dir",
             str(tmp_path / "download"),
         ],
     )
@@ -885,9 +934,8 @@ def test_cli_file_download_requires_overwrite_for_existing_file(
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(download_dir),
         ],
     )
@@ -903,9 +951,8 @@ def test_cli_file_download_requires_overwrite_for_existing_file(
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(download_dir),
             "--overwrite",
         ],
@@ -946,9 +993,8 @@ def test_cli_file_download_reports_http_error(monkeypatch, tmp_path) -> None:
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(tmp_path / "download"),
         ],
     )
@@ -1001,9 +1047,8 @@ def test_cli_file_download_cleanup_does_not_mask_original_error(
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(tmp_path / "download"),
         ],
     )
@@ -1043,9 +1088,8 @@ def test_cli_file_download_reports_request_exception(monkeypatch, tmp_path) -> N
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(tmp_path / "download"),
         ],
     )
@@ -1070,7 +1114,9 @@ def test_cli_file_download_reports_unexpected_exception(monkeypatch, tmp_path) -
     monkeypatch.setattr(
         cli_file.requests,
         "get",
-        lambda *_args, **_kwargs: _FakeResponse(content=_tar_bytes({"one.txt": b"one"})),
+        lambda *_args, **_kwargs: _FakeResponse(
+            content=_tar_bytes({"one.txt": b"one"})
+        ),
     )
     monkeypatch.setattr(
         cli_file,
@@ -1088,9 +1134,8 @@ def test_cli_file_download_reports_unexpected_exception(monkeypatch, tmp_path) -
             "download",
             "--session-id",
             "user-1",
-            "--sandbox-file",
             "/tmp/one.txt",
-            "--download-dir",
+            "--dst-dir",
             str(tmp_path / "download"),
         ],
     )
@@ -1133,7 +1178,6 @@ def test_cli_file_list_posts_expected_payload(monkeypatch, tmp_path) -> None:
             "user-1",
             "--workspace",
             "/home/gem",
-            "--sandbox-dir",
             "project",
             "--no-recursive",
             "--hide-hidden",
@@ -1161,19 +1205,12 @@ def test_cli_file_list_posts_expected_payload(monkeypatch, tmp_path) -> None:
     assert json.loads(result.output)["data"]["path"] == "/home/gem/project"
 
 
-def test_cli_file_list_defaults_to_workspace(monkeypatch, tmp_path) -> None:
+def test_cli_file_list_requires_path(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.cli_file as cli_file
 
     _patch_store_path(monkeypatch, tmp_path)
     _patch_session_resolution(monkeypatch, cli_file)
-    captured = {}
-
-    def fake_post(_url, **kwargs):
-        captured["json"] = kwargs["json"]
-        return _FakeResponse(payload={"success": True, "data": {"files": []}})
-
-    monkeypatch.setattr(cli_file.requests, "post", fake_post)
 
     result = runner.invoke(
         app,
@@ -1188,8 +1225,8 @@ def test_cli_file_list_defaults_to_workspace(monkeypatch, tmp_path) -> None:
         ],
     )
 
-    assert result.exit_code == 0
-    assert captured["json"]["path"] == "/home/gem"
+    assert result.exit_code != 0
+    assert "PATH" in result.output
 
 
 def test_cli_file_workspace_root_accepts_child_paths(monkeypatch, tmp_path) -> None:
@@ -1200,7 +1237,7 @@ def test_cli_file_workspace_root_accepts_child_paths(monkeypatch, tmp_path) -> N
         cli_file._resolve_sandbox_path(
             "foo",
             workspace="/",
-            option_name="--sandbox-dir",
+            option_name="--src-dir",
         )
         == "/foo"
     )
@@ -1208,7 +1245,7 @@ def test_cli_file_workspace_root_accepts_child_paths(monkeypatch, tmp_path) -> N
         cli_file._resolve_sandbox_path(
             "/foo",
             workspace="/",
-            option_name="--sandbox-dir",
+            option_name="--src-dir",
         )
         == "/foo"
     )
@@ -1217,11 +1254,18 @@ def test_cli_file_workspace_root_accepts_child_paths(monkeypatch, tmp_path) -> N
 @pytest.mark.parametrize(
     ("args", "message"),
     [
-        (["--max-depth", "-1"], "--max-depth must be greater than or equal to 0"),
-        (["--sort-by", "path"], "--sort-by must be one of"),
         (
-            ["--workspace", "relative"],
+            ["/tmp", "--max-depth", "-1"],
+            "--max-depth must be greater than or equal to 0",
+        ),
+        (["/tmp", "--sort-by", "path"], "--sort-by must be one of"),
+        (
+            ["--workspace", "relative", "path"],
             "--workspace must be an absolute sandbox path",
+        ),
+        (
+            ["relative"],
+            "PATH must be absolute when --workspace is omitted",
         ),
     ],
 )
@@ -1257,7 +1301,7 @@ def test_cli_file_list_reports_api_success_false(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["sandbox", "file", "list", "--session-id", "user-1"],
+        ["sandbox", "file", "list", "--session-id", "user-1", "/tmp"],
     )
 
     assert result.exit_code == 1
@@ -1280,7 +1324,7 @@ def test_cli_file_list_reports_request_exception(monkeypatch, tmp_path) -> None:
 
     result = runner.invoke(
         app,
-        ["sandbox", "file", "list", "--session-id", "user-1"],
+        ["sandbox", "file", "list", "--session-id", "user-1", "/tmp"],
     )
 
     assert result.exit_code == 1
@@ -1303,7 +1347,7 @@ def test_cli_file_list_reports_unexpected_exception(monkeypatch, tmp_path) -> No
 
     result = runner.invoke(
         app,
-        ["sandbox", "file", "list", "--session-id", "user-1"],
+        ["sandbox", "file", "list", "--session-id", "user-1", "/tmp"],
     )
 
     assert result.exit_code == 1
@@ -1319,13 +1363,13 @@ def test_cli_file_helper_error_edges(monkeypatch, tmp_path) -> None:
         cli_file._resolve_sandbox_path(
             None,
             workspace=None,
-            option_name="--sandbox-dir",
+            option_name="--src-dir",
         )
     with pytest.raises(cli_file.typer.Exit):
         cli_file._resolve_sandbox_path(
             "/tmp/outside",
             workspace="/home/gem",
-            option_name="--sandbox-dir",
+            option_name="--src-dir",
         )
 
     assert (
