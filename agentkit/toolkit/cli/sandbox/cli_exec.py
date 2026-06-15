@@ -26,10 +26,21 @@ import termios
 import threading
 import tty
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator, Optional
 
 import typer
 
+from agentkit.toolkit.cli.sandbox.cli_file import (
+    _build_remote_extract_command,
+    _create_upload_archive,
+    _exec_shell_command,
+    _new_remote_archive_path,
+    _normalize_workspace,
+    _resolve_sandbox_path,
+    _upload_remote_file,
+    _validate_upload_inputs,
+)
 from agentkit.toolkit.cli.sandbox.session_create import (
     SANDBOX_TOOL_ID_ENV,
     build_model_envs,
@@ -46,6 +57,7 @@ from agentkit.toolkit.cli.sandbox.utils import (
 DETACH_SEQUENCE = b"\x1d"
 DETACH_HINT = "Ctrl-]"
 LOCAL_EXIT_COMMANDS = {"exit", "exit()"}
+DEFAULT_EXEC_WORKSPACE = "/home/gem"
 
 
 def _terminal_size() -> dict[str, int]:
@@ -232,6 +244,48 @@ def _connect_terminal(
             signal.signal(sigwinch, previous_sigwinch)
 
 
+def _upload_directory_before_exec(
+    session: dict[str, object],
+    *,
+    workspace: Optional[str],
+    upload_dir: Path,
+    dst_dir: Optional[str],
+) -> str:
+    resolved_workspace = _normalize_workspace(workspace)
+    resolved_dst_dir = _resolve_sandbox_path(
+        dst_dir,
+        workspace=resolved_workspace,
+        option_name="--dst-dir",
+        default_without_workspace=resolved_workspace,
+    )
+    resolved_upload_dir, resolved_upload_files = _validate_upload_inputs(
+        [upload_dir],
+        False,
+        None,
+    )
+    archive_path = _create_upload_archive(
+        upload_dir=resolved_upload_dir,
+        upload_files=resolved_upload_files,
+    )
+    remote_archive_path = _new_remote_archive_path("agentkit-upload")
+    try:
+        _upload_remote_file(
+            session,
+            local_path=archive_path,
+            remote_path=remote_archive_path,
+        )
+        _exec_shell_command(
+            session,
+            _build_remote_extract_command(
+                archive_path=remote_archive_path,
+                dst_dir=resolved_dst_dir,
+            ),
+        )
+    finally:
+        archive_path.unlink(missing_ok=True)
+    return resolved_dst_dir
+
+
 def exec_command(
     session_id: Optional[str] = typer.Option(
         None,
@@ -263,6 +317,28 @@ def exec_command(
         None,
         "--shell-id",
         help="Existing shell terminal ID to connect to.",
+    ),
+    workspace: str = typer.Option(
+        DEFAULT_EXEC_WORKSPACE,
+        "--workspace",
+        help=(
+            "Sandbox workspace root used to resolve relative --dst-dir values "
+            "when uploading before exec."
+        ),
+    ),
+    upload_dir: Optional[Path] = typer.Option(
+        None,
+        "--upload-dir",
+        "--uplaod-dir",
+        help="Local directory to upload before opening the exec session.",
+    ),
+    dst_dir: Optional[str] = typer.Option(
+        None,
+        "--dst-dir",
+        help=(
+            "Sandbox destination directory for --upload-dir. Defaults to "
+            "--workspace."
+        ),
     ),
     model_name: Optional[str] = typer.Option(
         None,
@@ -300,6 +376,19 @@ def exec_command(
     session_id = session.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         error("Sandbox session missing session_id")
+
+    try:
+        if upload_dir:
+            _upload_directory_before_exec(
+                session,
+                workspace=workspace,
+                upload_dir=upload_dir,
+                dst_dir=dst_dir,
+            )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
 
     ws_url = build_terminal_ws_url(session.get("endpoint"), shell_id=shell_id)
     initial_command = command

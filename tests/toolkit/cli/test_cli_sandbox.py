@@ -1909,6 +1909,141 @@ def test_cli_exec_runs_command_option(monkeypatch, tmp_path) -> None:
     assert captured["initial_command"] == "codex"
 
 
+def test_cli_exec_uploads_directory_before_connecting(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    upload_dir = tmp_path / "upload-src"
+    upload_dir.mkdir()
+    (upload_dir / "hello.txt").write_text("hello", encoding="utf-8")
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
+    monkeypatch.setattr(
+        cli_exec,
+        "_new_remote_archive_path",
+        lambda _prefix: "/tmp/agentkit-upload.tar",
+    )
+
+    events = []
+
+    def fake_upload_remote_file(session, *, local_path, remote_path):
+        assert session == stored_session
+        assert local_path.exists()
+        assert remote_path == "/tmp/agentkit-upload.tar"
+        events.append(("upload", remote_path))
+
+    def fake_exec_shell_command(session, command):
+        assert session == stored_session
+        events.append(("extract", command))
+        return {"success": True}
+
+    def fake_connect(ws_url, initial_command, on_shell_id=None):
+        events.append(("connect", ws_url, initial_command))
+
+    monkeypatch.setattr(cli_exec, "_upload_remote_file", fake_upload_remote_file)
+    monkeypatch.setattr(cli_exec, "_exec_shell_command", fake_exec_shell_command)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--uplaod-dir",
+            str(upload_dir),
+            "--command",
+            "codex",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        ("upload", "/tmp/agentkit-upload.tar"),
+        (
+            "extract",
+            "mkdir -p /home/gem && tar -xf /tmp/agentkit-upload.tar "
+            "-C /home/gem; status=$?; rm -f /tmp/agentkit-upload.tar; "
+            "[ $status -eq 0 ]",
+        ),
+        ("connect", "ws://sandbox.example.com/v1/shell/ws?token=abc", "codex"),
+    ]
+
+
+def test_cli_exec_upload_dir_resolves_relative_dst_dir_inside_workspace(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    upload_dir = tmp_path / "upload-src"
+    upload_dir.mkdir()
+    (upload_dir / "hello.txt").write_text("hello", encoding="utf-8")
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
+    monkeypatch.setattr(
+        cli_exec,
+        "_new_remote_archive_path",
+        lambda _prefix: "/tmp/agentkit-upload.tar",
+    )
+    monkeypatch.setattr(
+        cli_exec,
+        "_upload_remote_file",
+        lambda *_args, **_kwargs: None,
+    )
+    captured = {}
+
+    def fake_exec_shell_command(_session, command):
+        captured["command"] = command
+        return {"success": True}
+
+    def fake_connect(_ws_url, initial_command=None, on_shell_id=None):
+        captured["connected"] = True
+
+    monkeypatch.setattr(cli_exec, "_exec_shell_command", fake_exec_shell_command)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--upload-dir",
+            str(upload_dir),
+            "--workspace",
+            "/workspace",
+            "--dst-dir",
+            "project",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert (
+        captured["command"]
+        == "mkdir -p /workspace/project && tar -xf /tmp/agentkit-upload.tar "
+        "-C /workspace/project; status=$?; rm -f /tmp/agentkit-upload.tar; "
+        "[ $status -eq 0 ]"
+    )
+    assert captured["connected"] is True
+
+
 def test_cli_exec_passes_model_options_to_session_create(
     monkeypatch,
     tmp_path,
