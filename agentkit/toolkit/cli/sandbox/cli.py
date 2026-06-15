@@ -37,6 +37,9 @@ sandbox_app.command(
     name="exec",
     context_settings={"allow_extra_args": True},
 )(exec_command)
-sandbox_app.command(name="shell")(shell_command)
+sandbox_app.command(
+    name="shell",
+    context_settings={"allow_extra_args": True},
+)(shell_command)
 sandbox_app.command(name="web")(web_command)
 sandbox_app.add_typer(file_command, name="file")

@@ -16,11 +16,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Optional
 
 import requests
 import typer
 
+from agentkit.toolkit.cli.sandbox.cli_exec import (
+    DEFAULT_EXEC_WORKSPACE,
+    _collect_exec_upload_sources,
+    _upload_source_before_exec,
+)
 from agentkit.toolkit.cli.sandbox.session_create import (
     SANDBOX_TOOL_ID_ENV,
     ensure_sandbox_session,
@@ -36,6 +42,7 @@ from agentkit.toolkit.cli.sandbox.utils import (
 
 
 def shell_command(
+    ctx: typer.Context,
     session_id: Optional[str] = typer.Option(
         None,
         "--session-id",
@@ -69,6 +76,29 @@ def shell_command(
         "--shell-id",
         help="Shell terminal ID for re-entering an existing shell.",
     ),
+    workspace: str = typer.Option(
+        DEFAULT_EXEC_WORKSPACE,
+        "--workspace",
+        help=(
+            "Sandbox workspace root. Relative --dst-dir values are "
+            "resolved inside this directory."
+        ),
+    ),
+    src_dir: Optional[Path] = typer.Option(
+        None,
+        "--src-dir",
+        help=(
+            "Local file or directory to upload before executing the command."
+        ),
+    ),
+    dst_dir: Optional[str] = typer.Option(
+        None,
+        "--dst-dir",
+        help=(
+            "Relative sandbox destination directory for --src-dir. Defaults "
+            "to --workspace."
+        ),
+    ),
 ) -> None:
     """Execute a command in a sandbox shell."""
     try:
@@ -77,6 +107,20 @@ def shell_command(
             tool_id=tool_id,
             tool_type=tool_type.value,
         )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
+
+    try:
+        src_dirs = _collect_exec_upload_sources(ctx, src_dir)
+        if src_dirs:
+            _upload_source_before_exec(
+                session,
+                workspace=workspace,
+                src_dirs=src_dirs,
+                dst_dir=dst_dir,
+            )
     except typer.Exit:
         raise
     except Exception as exc:

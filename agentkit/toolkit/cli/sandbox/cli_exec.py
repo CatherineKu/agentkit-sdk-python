@@ -277,6 +277,18 @@ def _resolve_exec_upload_sources(src_dirs: list[Path]) -> list[Path]:
     return resolved_sources
 
 
+def _collect_exec_upload_sources(
+    ctx: typer.Context,
+    src_dir: Optional[Path],
+) -> list[Path]:
+    src_dirs = [Path(value) for value in ctx.args]
+    if src_dirs and not src_dir:
+        error("Additional source paths require --src-dir")
+    if src_dir:
+        src_dirs.insert(0, src_dir)
+    return src_dirs
+
+
 def _upload_source_before_exec(
     session: dict[str, object],
     *,
@@ -409,11 +421,8 @@ def exec_command(
         error("Sandbox session missing session_id")
 
     try:
-        src_dirs = [Path(value) for value in ctx.args]
-        if src_dirs and not src_dir:
-            error("Additional source paths require --src-dir")
-        if src_dir:
-            src_dirs.insert(0, src_dir)
+        src_dirs = _collect_exec_upload_sources(ctx, src_dir)
+        if src_dirs:
             _upload_source_before_exec(
                 session,
                 workspace=workspace,

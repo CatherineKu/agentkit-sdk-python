@@ -1754,6 +1754,139 @@ def test_cli_shell_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
     assert "session_id" not in payload["data"]
 
 
+def test_cli_shell_uploads_sources_before_command(monkeypatch, tmp_path) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
+
+    file_one = tmp_path / "one.txt"
+    file_two = tmp_path / "two.txt"
+    file_one.write_text("one", encoding="utf-8")
+    file_two.write_text("two", encoding="utf-8")
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
+    events = []
+
+    def fake_upload_source_before_exec(session, *, workspace, src_dirs, dst_dir):
+        events.append(
+            (
+                "upload",
+                session,
+                workspace,
+                [str(src_dir) for src_dir in src_dirs],
+                dst_dir,
+            )
+        )
+
+    class FakeResponse:
+        text = '{"success": true}'
+
+        def json(self):
+            return {
+                "success": True,
+                "data": {
+                    "session_id": "shell-1",
+                    "status": "completed",
+                    "output": "done",
+                    "exit_code": 0,
+                },
+            }
+
+    def fake_post(url, json, timeout):
+        events.append(("post", url, json, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(
+        cli_shell,
+        "_upload_source_before_exec",
+        fake_upload_source_before_exec,
+    )
+    monkeypatch.setattr(cli_shell.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--command",
+            "echo done",
+            "--src-dir",
+            str(file_one),
+            str(file_two),
+            "--workspace",
+            "/workspace",
+            "--dst-dir",
+            "project",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        (
+            "upload",
+            stored_session,
+            "/workspace",
+            [str(file_one), str(file_two)],
+            "project",
+        ),
+        (
+            "post",
+            "https://sandbox.example.com/v1/shell/exec",
+            {"id": "", "exec_dir": "", "command": "echo done"},
+            cli_shell.SANDBOX_EXEC_TIMEOUT_SECONDS,
+        ),
+    ]
+    payload = json.loads(result.output)
+    assert payload["data"]["shell_id"] == "shell-1"
+
+
+def test_cli_shell_rejects_extra_source_without_src_dir(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
+
+    file_one = tmp_path / "one.txt"
+    file_one.write_text("one", encoding="utf-8")
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
+    posted = {"value": False}
+
+    def fake_post(*_args, **_kwargs):
+        posted["value"] = True
+
+    monkeypatch.setattr(cli_shell.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--command",
+            "echo done",
+            str(file_one),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Additional source paths require --src-dir" in result.output
+    assert posted["value"] is False
+
+
 def test_cli_shell_requires_command() -> None:
     from agentkit.toolkit.cli.cli import app
 

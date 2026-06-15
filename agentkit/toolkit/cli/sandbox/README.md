@@ -260,6 +260,12 @@ agentkit sandbox shell \
   --session-id 123456789 \
   --command 'echo $TEST_VAR' \
   --shell-id shell-example
+
+agentkit sandbox shell \
+  --session-id 123456789 \
+  --command 'ls -la /home/gem/project' \
+  --src-dir ./README.md ./requirements.txt \
+  --dst-dir project
 ```
 
 Options:
@@ -275,6 +281,13 @@ Options:
 - `--command`: required. Command to execute in the sandbox.
 - `--exec-dir`: optional execution directory.
 - `--shell-id`: optional shell terminal ID for re-entering an existing shell.
+- `--workspace`: optional sandbox workspace root; defaults to `/home/gem`.
+- `--src-dir`: optional local file or directory to upload before executing the
+  shell command. Additional file or directory paths can follow this option,
+  separated by spaces.
+- `--dst-dir`: optional sandbox destination directory for `--src-dir`. This is
+  a relative path appended under `--workspace`; when omitted, sources are
+  uploaded into `--workspace`.
 
 The command posts to `<endpoint>/v1/shell/exec` with:
 
@@ -288,6 +301,10 @@ The command posts to `<endpoint>/v1/shell/exec` with:
 
 The response is returned as JSON. If the service returns `data.session_id`, the
 CLI renames it to `data.shell_id`.
+
+When `--src-dir` is provided, `shell` uses the same upload flow as
+`sandbox exec`: archive local sources, upload the archive to the session,
+extract it under `--workspace` plus `--dst-dir`, then execute `--command`.
 
 ### Web
 
