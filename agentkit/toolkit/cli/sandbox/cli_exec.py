@@ -34,12 +34,12 @@ import typer
 from agentkit.toolkit.cli.sandbox.cli_file import (
     _build_remote_extract_command,
     _create_upload_archive,
+    _create_sources_upload_archive,
     _exec_shell_command,
     _new_remote_archive_path,
     _normalize_workspace,
     _resolve_sandbox_path,
     _upload_remote_file,
-    _validate_upload_inputs,
 )
 from agentkit.toolkit.cli.sandbox.session_create import (
     SANDBOX_TOOL_ID_ENV,
@@ -244,29 +244,58 @@ def _connect_terminal(
             signal.signal(sigwinch, previous_sigwinch)
 
 
-def _upload_directory_before_exec(
+def _resolve_exec_dst_dir(
+    *,
+    workspace: Optional[str],
+    dst_dir: Optional[str],
+) -> str:
+    resolved_workspace = _normalize_workspace(workspace) or DEFAULT_EXEC_WORKSPACE
+    raw_dst_dir = (dst_dir or "").strip()
+    if not raw_dst_dir:
+        return resolved_workspace
+    if raw_dst_dir.startswith("/"):
+        error("--dst-dir must be relative to --workspace")
+    return _resolve_sandbox_path(
+        raw_dst_dir,
+        workspace=resolved_workspace,
+        option_name="--dst-dir",
+    )
+
+
+def _resolve_exec_upload_sources(src_dirs: list[Path]) -> list[Path]:
+    resolved_sources = []
+    seen_names: set[str] = set()
+    for src_dir in src_dirs:
+        if not src_dir.exists():
+            error(f"Source path not found: {src_dir}")
+        if not src_dir.is_dir() and not src_dir.is_file():
+            error(f"Source path is not a file or directory: {src_dir}")
+        if src_dir.name in seen_names:
+            error(f"Duplicate source name: {src_dir.name}")
+        seen_names.add(src_dir.name)
+        resolved_sources.append(src_dir)
+    return resolved_sources
+
+
+def _upload_source_before_exec(
     session: dict[str, object],
     *,
     workspace: Optional[str],
-    upload_dir: Path,
+    src_dirs: list[Path],
     dst_dir: Optional[str],
 ) -> str:
-    resolved_workspace = _normalize_workspace(workspace)
-    resolved_dst_dir = _resolve_sandbox_path(
-        dst_dir,
-        workspace=resolved_workspace,
-        option_name="--dst-dir",
-        default_without_workspace=resolved_workspace,
+    resolved_dst_dir = _resolve_exec_dst_dir(
+        workspace=workspace,
+        dst_dir=dst_dir,
     )
-    resolved_upload_dir, resolved_upload_files = _validate_upload_inputs(
-        [upload_dir],
-        False,
-        None,
-    )
-    archive_path = _create_upload_archive(
-        upload_dir=resolved_upload_dir,
-        upload_files=resolved_upload_files,
-    )
+    resolved_sources = _resolve_exec_upload_sources(src_dirs)
+    if len(resolved_sources) == 1 and resolved_sources[0].is_dir():
+        archive_path = _create_upload_archive(
+            upload_dir=resolved_sources[0],
+            upload_files=[],
+        )
+    else:
+        archive_path = _create_sources_upload_archive(resolved_sources)
     remote_archive_path = _new_remote_archive_path("agentkit-upload")
     try:
         _upload_remote_file(
@@ -287,6 +316,7 @@ def _upload_directory_before_exec(
 
 
 def exec_command(
+    ctx: typer.Context,
     session_id: Optional[str] = typer.Option(
         None,
         "--session-id",
@@ -322,22 +352,23 @@ def exec_command(
         DEFAULT_EXEC_WORKSPACE,
         "--workspace",
         help=(
-            "Sandbox workspace root used to resolve relative --dst-dir values "
-            "when uploading before exec."
+            "Sandbox workspace root. Relative --dst-dir values are "
+            "resolved inside this directory."
         ),
     ),
-    upload_dir: Optional[Path] = typer.Option(
+    src_dir: Optional[Path] = typer.Option(
         None,
-        "--upload-dir",
-        "--uplaod-dir",
-        help="Local directory to upload before opening the exec session.",
+        "--src-dir",
+        help=(
+            "Local file or directory to upload before opening the exec session."
+        ),
     ),
     dst_dir: Optional[str] = typer.Option(
         None,
         "--dst-dir",
         help=(
-            "Sandbox destination directory for --upload-dir. Defaults to "
-            "--workspace."
+            "Relative sandbox destination directory for --src-dir. Defaults "
+            "to --workspace."
         ),
     ),
     model_name: Optional[str] = typer.Option(
@@ -378,11 +409,15 @@ def exec_command(
         error("Sandbox session missing session_id")
 
     try:
-        if upload_dir:
-            _upload_directory_before_exec(
+        src_dirs = [Path(value) for value in ctx.args]
+        if src_dirs and not src_dir:
+            error("Additional source paths require --src-dir")
+        if src_dir:
+            src_dirs.insert(0, src_dir)
+            _upload_source_before_exec(
                 session,
                 workspace=workspace,
-                upload_dir=upload_dir,
+                src_dirs=src_dirs,
                 dst_dir=dst_dir,
             )
     except typer.Exit:

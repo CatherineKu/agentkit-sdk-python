@@ -327,8 +327,9 @@ without running an initial command.
 
 ```bash
 agentkit sandbox exec --session-id 123456789
-agentkit sandbox exec --session-id 123456789 --upload-dir ./workspace
-agentkit sandbox exec --session-id 123456789 --uplaod-dir ./workspace
+agentkit sandbox exec --session-id 123456789 --src-dir ./workspace
+agentkit sandbox exec --session-id 123456789 --src-dir ./main.py --dst-dir project
+agentkit sandbox exec --session-id 123456789 --src-dir ./README.md ./requirements.txt --dst-dir tmp
 ```
 
 Options:
@@ -346,12 +347,13 @@ Options:
   `--command codex` to start the remote Codex TUI.
 - `--shell-id`: optional. Existing shell terminal ID to connect to. When this is
   set and `--command` is omitted, no initial command is sent.
-- `--workspace`: optional sandbox workspace root used to resolve relative
-  `--dst-dir` values before exec; defaults to `/home/gem`.
-- `--upload-dir`: optional local directory to upload before opening the exec
-  session. The misspelled alias `--uplaod-dir` is also accepted.
-- `--dst-dir`: optional sandbox destination directory for `--upload-dir`.
-  Defaults to `--workspace`; relative paths are resolved inside `--workspace`.
+- `--workspace`: optional sandbox workspace root; defaults to `/home/gem`.
+- `--src-dir`: optional local file or directory to upload before opening the
+  exec session. Additional file or directory paths can follow this option,
+  separated by spaces.
+- `--dst-dir`: optional sandbox destination directory for `--src-dir`. This is
+  a relative path appended under `--workspace`; when omitted, sources are
+  uploaded into `--workspace`.
 - `--model-name`: optional. When creating a sandbox session, injects the value
   as `OPENCODE_MODEL`, `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
 - `--model-api-key`: optional. When creating a sandbox session, injects the
@@ -362,10 +364,11 @@ The command connects to `<endpoint>/v1/shell/ws`, streams remote output to local
 stdout, forwards local stdin as terminal input, sends terminal resize events, and
 responds to WebSocket `ping` messages with `pong`.
 
-When `--upload-dir` is provided, the command first reuses the sandbox file upload
-flow to archive the local directory, upload it to the session, and extract it
-into `--dst-dir`. The WebSocket exec connection is opened only after the upload
-and extraction complete.
+When `--src-dir` is provided, the command first reuses the sandbox file upload
+flow to archive the local file or directory, upload it to the session, and
+extract it into the directory resolved from `--workspace` and `--dst-dir`. The
+WebSocket exec connection is opened only after the upload and extraction
+complete.
 
 When the remote terminal returns a shell session ID, the CLI prints it and
 stores it in the `terminal_shell_id` list in `.agentkit/sandbox/sessions.json`

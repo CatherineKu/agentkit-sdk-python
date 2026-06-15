@@ -33,7 +33,10 @@ sandbox_app = typer.Typer(
 
 sandbox_app.command(name="create")(create_command)
 sandbox_app.command(name="get")(get_command)
-sandbox_app.command(name="exec")(exec_command)
+sandbox_app.command(
+    name="exec",
+    context_settings={"allow_extra_args": True},
+)(exec_command)
 sandbox_app.command(name="shell")(shell_command)
 sandbox_app.command(name="web")(web_command)
 sandbox_app.add_typer(file_command, name="file")
