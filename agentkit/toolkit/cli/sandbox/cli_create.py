@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -26,10 +25,21 @@ import typer
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
-from agentkit.toolkit.cli.sandbox.session_create import (
+from agentkit.toolkit.cli.sandbox.model_config import (
+    ANTHROPIC_BASE_URL_ENV_KEYS,
+    CODE_ENV_CODEX_HOME,
+    CODE_ENV_HOME,
+    CODEX_CONFIG_TOML_ENV,
+    CODEX_MODEL_CATALOG_JSON_ENV,
+    DEFAULT_ANTHROPIC_BASE_URL,
+    DEFAULT_MODEL_BASE_URL,
+    DEFAULT_MODEL_NAME,
     MODEL_API_KEY_ENV,
     MODEL_API_KEY_ENV_KEYS,
+    MODEL_BASE_URL_ENV_KEYS,
     MODEL_NAME_ENV_KEYS,
+    build_codex_config_toml as _shared_build_codex_config_toml,
+    build_codex_model_catalog_json as _shared_build_codex_model_catalog_json,
 )
 from agentkit.toolkit.cli.sandbox.tool_resolve import save_tool_result
 from agentkit.toolkit.cli.sandbox.utils import error
@@ -46,27 +56,6 @@ SANDBOX_TOS_REGION_ENV = "AGENTKIT_SANDBOX_TOS_REGION"
 DEFAULT_CREATE_TOOL_TYPE = "CodeEnv"
 DEFAULT_TOS_BUCKET_PATH = "/sandbox-session/default/default"
 DEFAULT_TOS_LOCAL_PATH = "/home/gem"
-CODE_ENV_HOME = "/home/gem"
-CODE_ENV_CODEX_HOME = "/home/gem/.codex"
-CODEX_MODEL_CATALOG_PATH = f"{CODE_ENV_CODEX_HOME}/model-catalog.json"
-DEFAULT_MODEL_NAME = "deepseek-v4-flash-260425"
-DEFAULT_MODEL_NAME_LIST = (
-    DEFAULT_MODEL_NAME,
-    "deepseek-v4-pro-260425",
-    "doubao-seed-2-0-pro-260215",
-)
-DEFAULT_MODEL_CONTEXT_WINDOW = 1000000
-MODEL_CONTEXT_WINDOW_OVERRIDES = {
-    "doubao-seed-2-0-pro-260215": 256000,
-}
-DEFAULT_MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-DEFAULT_ANTHROPIC_BASE_URL = "https://ark.cn-beijing.volces.com/api/compatible"
-MODEL_BASE_URL_ENV_KEYS = (
-    "OPENCODE_BASE_URL",
-    "CODEX_BASE_URL",
-    "MODEL_BASE_URL",
-)
-ANTHROPIC_BASE_URL_ENV_KEYS = ("ANTHROPIC_BASE_URL",)
 DISABLED_SERVICE_ENV_KEYS = (
     "DISABLE_JUPYTER",
     "DISABLE_CODE_SERVER",
@@ -114,100 +103,12 @@ def _append_tool_envs(
     )
 
 
-def _toml_quote(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
 def _build_codex_config_toml(model_name: str) -> str:
-    quoted_model = _toml_quote(model_name)
-    return "\n".join(
-        [
-            'model_provider = "codex"',
-            f"model = {quoted_model}",
-            f"review_model = {quoted_model}",
-            'approval_policy = "never"',
-            'sandbox_mode = "danger-full-access"',
-            'model_reasoning_effort = "medium"',
-            'personality = "pragmatic"',
-            "check_for_update_on_startup = false",
-            'web_search = "disabled"',
-            f"model_catalog_json = {_toml_quote(CODEX_MODEL_CATALOG_PATH)}",
-            'developer_instructions = """',
-            "When the user asks for simple browser operation tasks, you can use xdg-open to complete them.",
-            '"""',
-            "",
-            "[model_providers.codex]",
-            'name = "codex"',
-            f"base_url = {_toml_quote(DEFAULT_MODEL_BASE_URL)}",
-            'wire_api = "responses"',
-            'env_key = "CODEX_API_KEY"',
-            "",
-            "[tui]",
-            "show_tooltips = false",
-            "",
-            '[projects."/home/gem"]',
-            'trust_level = "trusted"',
-            "",
-            "[mcp_servers.browser-use]",
-            'url = "http://localhost:8100/mcp"',
-            "",
-        ]
-    )
-
-
-def _build_model_catalog_item(model_name: str, max_context_window: int) -> dict:
-    return {
-        "slug": model_name,
-        "display_name": model_name,
-        "supported_reasoning_levels": [
-            {
-                "effort": "low",
-                "description": "Fast responses with lighter reasoning",
-            },
-            {
-                "effort": "medium",
-                "description": "Balances speed and reasoning depth",
-            },
-            {
-                "effort": "high",
-                "description": "Greater reasoning depth",
-            },
-        ],
-        "max_context_window": max_context_window,
-        "shell_type": "shell_command",
-        "visibility": "list",
-        "supported_in_api": True,
-        "priority": 100,
-        "base_instructions": "",
-        "supports_reasoning_summaries": True,
-        "support_verbosity": False,
-        "truncation_policy": {"mode": "tokens", "limit": 10000},
-        "supports_parallel_tool_calls": False,
-        "experimental_supported_tools": [],
-    }
-
-
-def _model_catalog_context_window(model_name: str) -> int:
-    return MODEL_CONTEXT_WINDOW_OVERRIDES.get(
-        model_name,
-        DEFAULT_MODEL_CONTEXT_WINDOW,
-    )
+    return _shared_build_codex_config_toml(model_name)
 
 
 def _build_codex_model_catalog_json(model_name: str) -> str:
-    deduped_model_names = list(
-        dict.fromkeys((model_name, *DEFAULT_MODEL_NAME_LIST))
-    )
-    payload = {
-        "models": [
-            _build_model_catalog_item(
-                name,
-                _model_catalog_context_window(name),
-            )
-            for name in deduped_model_names
-        ]
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return _shared_build_codex_model_catalog_json(model_name)
 
 
 def _append_code_env_tool_envs(
@@ -229,11 +130,11 @@ def _append_code_env_tool_envs(
                 Value=CODE_ENV_CODEX_HOME,
             ),
             tools_types.EnvsItemForCreateTool(
-                Key="CODEX_CONFIG_TOML",
+                Key=CODEX_CONFIG_TOML_ENV,
                 Value=_build_codex_config_toml(model_name),
             ),
             tools_types.EnvsItemForCreateTool(
-                Key="CODEX_MODEL_CATALOG_JSON",
+                Key=CODEX_MODEL_CATALOG_JSON_ENV,
                 Value=_build_codex_model_catalog_json(model_name),
             ),
         ]

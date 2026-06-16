@@ -410,6 +410,7 @@ def exec_command(
             envs=build_model_envs(
                 model_name=model_name,
                 model_api_key=model_api_key,
+                include_codex_config=tool_type == SandboxToolType.CODE_ENV,
             ),
         )
     except typer.Exit:

@@ -2581,6 +2581,67 @@ def test_cli_exec_passes_model_options_to_session_create(
     ]
 
 
+def test_cli_exec_syncs_codex_config_for_code_env_model_name(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    captured_session = {}
+    _patch_exec_session(
+        monkeypatch,
+        cli_exec,
+        stored_session,
+        capture=captured_session,
+    )
+    monkeypatch.setattr(
+        cli_exec,
+        "_connect_terminal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--model-name",
+            "claude-sonnet-4",
+        ],
+    )
+
+    assert result.exit_code == 0
+    envs = {item.key: item.value for item in captured_session["envs"]}
+    assert list(envs) == [
+        "OPENCODE_MODEL",
+        "CODEX_MODEL",
+        "ANTHROPIC_MODEL",
+        "CODEX_CONFIG_TOML",
+        "CODEX_MODEL_CATALOG_JSON",
+    ]
+    config_toml = envs["CODEX_CONFIG_TOML"]
+    assert 'model = "claude-sonnet-4"' in config_toml
+    assert 'review_model = "claude-sonnet-4"' in config_toml
+    assert 'model = "deepseek-v4-flash-260425"' not in config_toml
+    catalog = json.loads(envs["CODEX_MODEL_CATALOG_JSON"])
+    assert catalog["models"][0]["slug"] == "claude-sonnet-4"
+
+
 def test_cli_exec_rejects_model_base_url_option() -> None:
     from agentkit.toolkit.cli.cli import app
 

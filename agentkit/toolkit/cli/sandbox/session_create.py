@@ -23,6 +23,15 @@ from typing import Optional
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.sandbox.model_config import (
+    CODEX_CONFIG_TOML_ENV,
+    CODEX_MODEL_CATALOG_JSON_ENV,
+    MODEL_API_KEY_ENV,
+    MODEL_API_KEY_ENV_KEYS,
+    MODEL_NAME_ENV_KEYS,
+    build_codex_config_toml,
+    build_codex_model_catalog_json,
+)
 from agentkit.toolkit.cli.sandbox.session_sync import (
     session_info_to_result,
     sync_remote_sessions,
@@ -40,13 +49,6 @@ from agentkit.toolkit.cli.sandbox.utils import (
 DEFAULT_SANDBOX_TTL = 28800
 SANDBOX_TOOL_ID_ENV = "AGENTKIT_SANDBOX_TOOL_ID"
 SANDBOX_TTL_ENV = "AGENTKIT_SANDBOX_TTL"
-MODEL_NAME_ENV_KEYS = ("OPENCODE_MODEL", "CODEX_MODEL", "ANTHROPIC_MODEL")
-MODEL_API_KEY_ENV_KEYS = (
-    "OPENCODE_API_KEY",
-    "CODEX_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-)
-MODEL_API_KEY_ENV = "MODEL_API_KEY"
 CREATE_SESSION_START_FAIL_CODE = "ErrCreateSessionFail"
 CREATE_SESSION_CONFIRM_ATTEMPTS = 6
 CREATE_SESSION_CONFIRM_INTERVAL_SECONDS = 5
@@ -68,14 +70,40 @@ def _append_envs(
     )
 
 
+def _append_codex_config_envs(
+    envs: list[tools_types.EnvsItemForCreateSession],
+    model_name: Optional[str],
+) -> None:
+    resolved_model_name = (model_name or "").strip()
+    if not resolved_model_name:
+        return
+
+    envs.extend(
+        [
+            tools_types.EnvsItemForCreateSession(
+                key=CODEX_CONFIG_TOML_ENV,
+                value=build_codex_config_toml(resolved_model_name),
+            ),
+            tools_types.EnvsItemForCreateSession(
+                key=CODEX_MODEL_CATALOG_JSON_ENV,
+                value=build_codex_model_catalog_json(resolved_model_name),
+            ),
+        ]
+    )
+
+
 def build_model_envs(
     *,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
+    include_codex_config: bool = False,
 ) -> list[tools_types.EnvsItemForCreateSession] | None:
     envs: list[tools_types.EnvsItemForCreateSession] = []
+    resolved_model_name = (model_name or "").strip()
     resolved_model_api_key = model_api_key or os.getenv(MODEL_API_KEY_ENV)
-    _append_envs(envs, MODEL_NAME_ENV_KEYS, model_name)
+    _append_envs(envs, MODEL_NAME_ENV_KEYS, resolved_model_name)
+    if include_codex_config:
+        _append_codex_config_envs(envs, resolved_model_name)
     _append_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
     return envs or None
 
