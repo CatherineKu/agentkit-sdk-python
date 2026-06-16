@@ -20,8 +20,10 @@ import typer
 
 from agentkit.toolkit.cli.sandbox.cli_create import create_command
 from agentkit.toolkit.cli.sandbox.cli_exec import exec_command
+from agentkit.toolkit.cli.sandbox.cli_file import file_command
 from agentkit.toolkit.cli.sandbox.cli_get import get_command
 from agentkit.toolkit.cli.sandbox.cli_shell import shell_command
+from agentkit.toolkit.cli.sandbox.cli_web import web_command
 
 sandbox_app = typer.Typer(
     name="sandbox",
@@ -31,5 +33,13 @@ sandbox_app = typer.Typer(
 
 sandbox_app.command(name="create")(create_command)
 sandbox_app.command(name="get")(get_command)
-sandbox_app.command(name="exec")(exec_command)
-sandbox_app.command(name="shell")(shell_command)
+sandbox_app.command(
+    name="exec",
+    context_settings={"allow_extra_args": True},
+)(exec_command)
+sandbox_app.command(
+    name="shell",
+    context_settings={"allow_extra_args": True},
+)(shell_command)
+sandbox_app.command(name="web")(web_command)
+sandbox_app.add_typer(file_command, name="file")

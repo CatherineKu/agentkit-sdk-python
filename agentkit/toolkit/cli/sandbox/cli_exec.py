@@ -26,10 +26,21 @@ import termios
 import threading
 import tty
 from contextlib import contextmanager
+from pathlib import Path
 from typing import Iterator, Optional
 
 import typer
 
+from agentkit.toolkit.cli.sandbox.cli_file import (
+    _build_remote_extract_command,
+    _create_upload_archive,
+    _create_sources_upload_archive,
+    _exec_shell_command,
+    _new_remote_archive_path,
+    _normalize_workspace,
+    _resolve_sandbox_path,
+    _upload_remote_file,
+)
 from agentkit.toolkit.cli.sandbox.session_create import (
     SANDBOX_TOOL_ID_ENV,
     build_model_envs,
@@ -46,6 +57,7 @@ from agentkit.toolkit.cli.sandbox.utils import (
 DETACH_SEQUENCE = b"\x1d"
 DETACH_HINT = "Ctrl-]"
 LOCAL_EXIT_COMMANDS = {"exit", "exit()"}
+DEFAULT_EXEC_WORKSPACE = "/home/gem"
 
 
 def _terminal_size() -> dict[str, int]:
@@ -232,10 +244,95 @@ def _connect_terminal(
             signal.signal(sigwinch, previous_sigwinch)
 
 
+def _resolve_exec_dst_dir(
+    *,
+    workspace: Optional[str],
+    dst_dir: Optional[str],
+) -> str:
+    resolved_workspace = _normalize_workspace(workspace) or DEFAULT_EXEC_WORKSPACE
+    raw_dst_dir = (dst_dir or "").strip()
+    if not raw_dst_dir:
+        return resolved_workspace
+    if raw_dst_dir.startswith("/"):
+        error("--dst-dir must be relative to --workspace")
+    return _resolve_sandbox_path(
+        raw_dst_dir,
+        workspace=resolved_workspace,
+        option_name="--dst-dir",
+    )
+
+
+def _resolve_exec_upload_sources(src_dirs: list[Path]) -> list[Path]:
+    resolved_sources = []
+    seen_names: set[str] = set()
+    for src_dir in src_dirs:
+        if not src_dir.exists():
+            error(f"Source path not found: {src_dir}")
+        if not src_dir.is_dir() and not src_dir.is_file():
+            error(f"Source path is not a file or directory: {src_dir}")
+        if src_dir.name in seen_names:
+            error(f"Duplicate source name: {src_dir.name}")
+        seen_names.add(src_dir.name)
+        resolved_sources.append(src_dir)
+    return resolved_sources
+
+
+def _collect_exec_upload_sources(
+    ctx: typer.Context,
+    src_dir: Optional[Path],
+) -> list[Path]:
+    src_dirs = [Path(value) for value in ctx.args]
+    if src_dirs and not src_dir:
+        error("Additional source paths require --src-dir")
+    if src_dir:
+        src_dirs.insert(0, src_dir)
+    return src_dirs
+
+
+def _upload_source_before_exec(
+    session: dict[str, object],
+    *,
+    workspace: Optional[str],
+    src_dirs: list[Path],
+    dst_dir: Optional[str],
+) -> str:
+    resolved_dst_dir = _resolve_exec_dst_dir(
+        workspace=workspace,
+        dst_dir=dst_dir,
+    )
+    resolved_sources = _resolve_exec_upload_sources(src_dirs)
+    if len(resolved_sources) == 1 and resolved_sources[0].is_dir():
+        archive_path = _create_upload_archive(
+            upload_dir=resolved_sources[0],
+            upload_files=[],
+        )
+    else:
+        archive_path = _create_sources_upload_archive(resolved_sources)
+    remote_archive_path = _new_remote_archive_path("agentkit-upload")
+    try:
+        _upload_remote_file(
+            session,
+            local_path=archive_path,
+            remote_path=remote_archive_path,
+        )
+        _exec_shell_command(
+            session,
+            _build_remote_extract_command(
+                archive_path=remote_archive_path,
+                dst_dir=resolved_dst_dir,
+            ),
+        )
+    finally:
+        archive_path.unlink(missing_ok=True)
+    return resolved_dst_dir
+
+
 def exec_command(
+    ctx: typer.Context,
     session_id: Optional[str] = typer.Option(
         None,
         "--session-id",
+        "--sid",
         help=(
             "Sandbox session ID. Defaults to a generated UUID and creates "
             "a sandbox session when needed."
@@ -263,6 +360,29 @@ def exec_command(
         None,
         "--shell-id",
         help="Existing shell terminal ID to connect to.",
+    ),
+    workspace: str = typer.Option(
+        DEFAULT_EXEC_WORKSPACE,
+        "--workspace",
+        help=(
+            "Sandbox workspace root. Relative --dst-dir values are "
+            "resolved inside this directory."
+        ),
+    ),
+    src_dir: Optional[Path] = typer.Option(
+        None,
+        "--src-dir",
+        help=(
+            "Local file or directory to upload before opening the exec session."
+        ),
+    ),
+    dst_dir: Optional[str] = typer.Option(
+        None,
+        "--dst-dir",
+        help=(
+            "Relative sandbox destination directory for --src-dir. Defaults "
+            "to --workspace."
+        ),
     ),
     model_name: Optional[str] = typer.Option(
         None,
@@ -300,6 +420,20 @@ def exec_command(
     session_id = session.get("session_id")
     if not isinstance(session_id, str) or not session_id:
         error("Sandbox session missing session_id")
+
+    try:
+        src_dirs = _collect_exec_upload_sources(ctx, src_dir)
+        if src_dirs:
+            _upload_source_before_exec(
+                session,
+                workspace=workspace,
+                src_dirs=src_dirs,
+                dst_dir=dst_dir,
+            )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
 
     ws_url = build_terminal_ws_url(session.get("endpoint"), shell_id=shell_id)
     initial_command = command

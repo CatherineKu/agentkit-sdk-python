@@ -106,7 +106,7 @@ agentkit sandbox get
 
 Options:
 
-- `--session-id`: optional. Sandbox session ID to look up. If omitted, the CLI
+- `--session-id` / `--sid`: optional. Sandbox session ID to look up. If omitted, the CLI
   returns all records from `.agentkit/sandbox/sessions.json` after syncing the
   current tool.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -134,6 +134,123 @@ command exits with status `1` and returns structured JSON:
 }
 ```
 
+### File
+
+Upload, download, and list files in an existing sandbox session. File commands
+only operate on existing sessions; they do not create a session when
+`--session-id` is missing.
+
+Common options:
+
+- `--session-id` / `--sid`: required. Sandbox session ID to operate on.
+- `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
+  set, the CLI resolves an existing tool by `--tool-type`.
+- `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
+- `--workspace`: optional absolute sandbox path used as the root for relative
+  sandbox paths.
+
+Path rules:
+
+- Local paths are normal local filesystem paths.
+- Sandbox paths may be absolute, or relative to `--workspace`.
+- Relative sandbox paths require `--workspace`.
+- Absolute sandbox paths must stay inside `--workspace` when both are provided.
+
+#### Upload
+
+Upload local files:
+
+```bash
+agentkit sandbox file upload \
+  --session-id 123456789 \
+  --dst-dir /tmp/files \
+  ./a.txt ./b.txt
+```
+
+Upload a local directory:
+
+```bash
+agentkit sandbox file upload \
+  --session-id 123456789 \
+  --workspace /home/gem \
+  --src-dir ./project \
+  --dst-dir uploads/project
+```
+
+Upload options:
+
+- `FILE...`: local regular files to upload.
+- `--src-dir`: local directory to upload recursively. Uploads the directory
+  contents; it does not add the directory name as a top-level path.
+- `--dst-dir`: required sandbox destination directory. Created if missing.
+
+Use exactly one source form: `FILE...` or `--src-dir`. Multiple `FILE` values
+must not share the same base name because they are extracted into `--dst-dir`.
+
+#### Download
+
+Download sandbox files:
+
+```bash
+agentkit sandbox file download \
+  --session-id 123456789 \
+  --workspace /home/gem \
+  --dst-dir ./downloads \
+  uploads/a.txt uploads/b.txt
+```
+
+Download a sandbox directory:
+
+```bash
+agentkit sandbox file download \
+  --session-id 123456789 \
+  --src-dir /tmp/project \
+  --dst-dir ./project-copy
+```
+
+Download options:
+
+- `FILE...`: sandbox regular files to download.
+- `--src-dir`: sandbox directory to download recursively. Downloads the
+  directory contents; it does not add the directory name as a top-level path.
+- `--dst-dir`: required local directory. Created if missing.
+- `--overwrite`: overwrite existing local files while extracting.
+
+Use exactly one source form: `FILE...` or `--src-dir`. Multiple `FILE` values
+must not share the same base name because they are extracted into `--dst-dir`.
+Downloaded archive members must be relative regular files or directories; links,
+absolute paths, and `..` traversal are rejected.
+
+#### List
+
+List a sandbox path:
+
+```bash
+agentkit sandbox file list \
+  --session-id 123456789 \
+  /tmp/project
+```
+
+List arguments and options:
+
+- `PATH`: required sandbox path to list. Relative paths require `--workspace`.
+- `--recursive/--no-recursive`: list recursively. Defaults to no recursive.
+- `--show-hidden/--hide-hidden`: include hidden files. Defaults to hide hidden.
+- `--max-depth`: maximum recursive listing depth. Must be non-negative.
+- `--include-size/--no-include-size`: include file size metadata; defaults to
+  include size.
+- `--include-permissions`: include file permission metadata.
+- `--sort-by`: `name`, `size`, `modified`, or `type`; defaults to `name`.
+- `--sort-desc`: sort in descending order.
+
+Implementation notes:
+
+- Uploads and downloads use temporary tar archives so directories and multiple
+  files are transferred through the sandbox file API as a single payload.
+- Remote temporary archives are cleaned up after download. Cleanup is
+  best-effort: if cleanup fails, the CLI prints a warning and preserves the
+  original download or extraction result.
+
 ### Shell
 
 Execute a command in a sandbox shell.
@@ -143,11 +260,17 @@ agentkit sandbox shell \
   --session-id 123456789 \
   --command 'echo $TEST_VAR' \
   --shell-id shell-example
+
+agentkit sandbox shell \
+  --session-id 123456789 \
+  --command 'ls -la /home/gem/project' \
+  --src-dir ./README.md ./requirements.txt \
+  --dst-dir project
 ```
 
 Options:
 
-- `--session-id`: optional. Sandbox session ID used as the local session key.
+- `--session-id` / `--sid`: optional. Sandbox session ID used as the local session key.
   If omitted, a UUID is generated and the command creates a sandbox session
   through the same idempotent session ensure flow as `sandbox exec`.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -158,6 +281,13 @@ Options:
 - `--command`: required. Command to execute in the sandbox.
 - `--exec-dir`: optional execution directory.
 - `--shell-id`: optional shell terminal ID for re-entering an existing shell.
+- `--workspace`: optional sandbox workspace root; defaults to `/home/gem`.
+- `--src-dir`: optional local file or directory to upload before executing the
+  shell command. Additional file or directory paths can follow this option,
+  separated by spaces.
+- `--dst-dir`: optional sandbox destination directory for `--src-dir`. This is
+  a relative path appended under `--workspace`; when omitted, sources are
+  uploaded into `--workspace`.
 
 The command posts to `<endpoint>/v1/shell/exec` with:
 
@@ -172,6 +302,41 @@ The command posts to `<endpoint>/v1/shell/exec` with:
 The response is returned as JSON. If the service returns `data.session_id`, the
 CLI renames it to `data.shell_id`.
 
+When `--src-dir` is provided, `shell` uses the same upload flow as
+`sandbox exec`: archive local sources, upload the archive to the session,
+extract it under `--workspace` plus `--dst-dir`, then execute `--command`.
+
+### Web
+
+Return a browser URL for a sandbox session.
+
+```bash
+agentkit sandbox web --session-id 123456789
+agentkit sandbox web --session-id 123456789 --tool-id t-example
+```
+
+Options:
+
+- `--session-id` / `--sid`: required. Sandbox session ID to open in a browser.
+- `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. The
+  underscore alias `--tool_id` is also accepted.
+
+The command resolves the tool using the same existing-tool resolution flow as
+the other session-scoped sandbox commands, syncs remote sessions for that tool,
+then reads the session endpoint and appends `/vnc/index.html` with fixed
+browser parameters: `autoconnect=true`, `resize=scale`, and `reconnect=1`.
+When the endpoint includes `faasInstanceName` and `Authorization`, the command
+also derives the VNC `path` query parameter from those values. The URL is opened
+with the system default browser, and the response is JSON:
+
+```json
+{
+  "url": "https://example.com/vnc/index.html?autoconnect=true&resize=scale&reconnect=1&faasInstanceName=vefaas-example&Authorization=...&path=websockify%3FfaasInstanceName%3Dvefaas-example%26Authorization%3D...",
+  "tool_id": "t-example",
+  "session_id": "123456789"
+}
+```
+
 ### Exec
 
 Open a streaming WebSocket exec session to the sandbox. By default, this connects
@@ -179,11 +344,14 @@ without running an initial command.
 
 ```bash
 agentkit sandbox exec --session-id 123456789
+agentkit sandbox exec --session-id 123456789 --src-dir ./workspace
+agentkit sandbox exec --session-id 123456789 --src-dir ./main.py --dst-dir project
+agentkit sandbox exec --session-id 123456789 --src-dir ./README.md ./requirements.txt --dst-dir tmp
 ```
 
 Options:
 
-- `--session-id`: optional. Sandbox session ID used as the local
+- `--session-id` / `--sid`: optional. Sandbox session ID used as the local
   session key. If omitted, a UUID is generated and the command creates a
   sandbox session through the same idempotent session ensure flow.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -196,6 +364,13 @@ Options:
   `--command codex` to start the remote Codex TUI.
 - `--shell-id`: optional. Existing shell terminal ID to connect to. When this is
   set and `--command` is omitted, no initial command is sent.
+- `--workspace`: optional sandbox workspace root; defaults to `/home/gem`.
+- `--src-dir`: optional local file or directory to upload before opening the
+  exec session. Additional file or directory paths can follow this option,
+  separated by spaces.
+- `--dst-dir`: optional sandbox destination directory for `--src-dir`. This is
+  a relative path appended under `--workspace`; when omitted, sources are
+  uploaded into `--workspace`.
 - `--model-name`: optional. When creating a sandbox session, injects the value
   as `OPENCODE_MODEL`, `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
 - `--model-api-key`: optional. When creating a sandbox session, injects the
@@ -205,6 +380,12 @@ Options:
 The command connects to `<endpoint>/v1/shell/ws`, streams remote output to local
 stdout, forwards local stdin as terminal input, sends terminal resize events, and
 responds to WebSocket `ping` messages with `pong`.
+
+When `--src-dir` is provided, the command first reuses the sandbox file upload
+flow to archive the local file or directory, upload it to the session, and
+extract it into the directory resolved from `--workspace` and `--dst-dir`. The
+WebSocket exec connection is opened only after the upload and extraction
+complete.
 
 When the remote terminal returns a shell session ID, the CLI prints it and
 stores it in the `terminal_shell_id` list in `.agentkit/sandbox/sessions.json`
@@ -251,6 +432,11 @@ When `--tool-id` and `AGENTKIT_SANDBOX_TOOL_ID` are both omitted,
 
 Cached and listed tools are reused only when their status is `Ready`; tools in
 states such as `Creating`, `Error`, `Deleting`, or `Deleted` are ignored.
+When a tool ID is provided explicitly, read from `AGENTKIT_SANDBOX_TOOL_ID`,
+reused from an existing session record, or loaded from
+`.agentkit/sandbox/tools.json`, the CLI calls `GetTool` before using it. If the
+tool does not exist or its current status is not `Ready`, the command exits
+with that error instead of creating a session against an unusable tool.
 
 Resolved tool records are stored in:
 
@@ -279,7 +465,7 @@ Example:
 
 ## Module Layout
 
-- `cli.py`: registers the `create`, `get`, `exec`, and `shell` sandbox subcommands.
+- `cli.py`: registers the `create`, `get`, `exec`, `shell`, and `file` sandbox subcommands.
 - `../cli.py`: registers the `sandbox` command group.
 - `session_create.py`: shared session creation and idempotent ensure helpers.
 - `session_sync.py`: shared remote session list/sync helpers.
@@ -288,4 +474,5 @@ Example:
 - `cli_get.py`: get command implementation.
 - `cli_shell.py`: shell command implementation.
 - `cli_exec.py`: streaming exec command implementation.
+- `cli_file.py`: file upload, download, and list command implementation.
 - `utils.py`: shared store, URL, JSON, and error helpers.

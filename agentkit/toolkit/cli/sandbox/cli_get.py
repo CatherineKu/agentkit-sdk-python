@@ -48,6 +48,7 @@ def get_command(
     session_id: Optional[str] = typer.Option(
         None,
         "--session-id",
+        "--sid",
         help=(
             "Sandbox session ID to look up. Omit to return all local "
             "sandbox sessions after syncing the current tool."
