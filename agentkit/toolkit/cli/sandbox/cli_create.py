@@ -132,6 +132,9 @@ def _build_codex_config_toml(model_name: str) -> str:
             "check_for_update_on_startup = false",
             'web_search = "disabled"',
             f"model_catalog_json = {_toml_quote(CODEX_MODEL_CATALOG_PATH)}",
+            'developer_instructions = """',
+            "When the user asks for simple browser operation tasks, you can use xdg-open to complete them.",
+            '"""',
             "",
             "[model_providers.codex]",
             'name = "codex"',
@@ -144,6 +147,9 @@ def _build_codex_config_toml(model_name: str) -> str:
             "",
             '[projects."/home/gem"]',
             'trust_level = "trusted"',
+            "",
+            "[mcp_servers.browser-use]",
+            'url = "http://localhost:8100/mcp"',
             "",
         ]
     )

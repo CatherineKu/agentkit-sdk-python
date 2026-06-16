@@ -395,11 +395,21 @@ def test_build_create_tool_request_adds_code_env_config_envs(monkeypatch):
     assert "model_auto_compact_token_limit" not in config_toml
     assert "model_supports_reasoning_summaries" not in config_toml
     assert "model_reasoning_summary" not in config_toml
+    assert (
+        'model_catalog_json = "/home/gem/.codex/model-catalog.json"\n'
+        'developer_instructions = """\n'
+        "When the user asks for simple browser operation tasks, "
+        "you can use xdg-open to complete them.\n"
+        '"""'
+    ) in config_toml
     assert "[tui]" in config_toml
     assert "show_tooltips = false" in config_toml
     assert '[projects."/home/gem"]' in config_toml
     assert 'trust_level = "trusted"' in config_toml
     assert "check_for_update_on_startup = false" in config_toml
+    assert config_toml.rstrip().endswith(
+        '[mcp_servers.browser-use]\nurl = "http://localhost:8100/mcp"'
+    )
 
     catalog_json = envs["CODEX_MODEL_CATALOG_JSON"]
     assert "\n  " in catalog_json
