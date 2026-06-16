@@ -106,7 +106,7 @@ agentkit sandbox get
 
 Options:
 
-- `--session-id`: optional. Sandbox session ID to look up. If omitted, the CLI
+- `--session-id` / `--sid`: optional. Sandbox session ID to look up. If omitted, the CLI
   returns all records from `.agentkit/sandbox/sessions.json` after syncing the
   current tool.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -142,7 +142,7 @@ only operate on existing sessions; they do not create a session when
 
 Common options:
 
-- `--session-id`: required. Sandbox session ID to operate on.
+- `--session-id` / `--sid`: required. Sandbox session ID to operate on.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
   set, the CLI resolves an existing tool by `--tool-type`.
 - `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
@@ -270,7 +270,7 @@ agentkit sandbox shell \
 
 Options:
 
-- `--session-id`: optional. Sandbox session ID used as the local session key.
+- `--session-id` / `--sid`: optional. Sandbox session ID used as the local session key.
   If omitted, a UUID is generated and the command creates a sandbox session
   through the same idempotent session ensure flow as `sandbox exec`.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -317,7 +317,7 @@ agentkit sandbox web --session-id 123456789 --tool-id t-example
 
 Options:
 
-- `--session-id`: required. Sandbox session ID to open in a browser.
+- `--session-id` / `--sid`: required. Sandbox session ID to open in a browser.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. The
   underscore alias `--tool_id` is also accepted.
 
@@ -351,7 +351,7 @@ agentkit sandbox exec --session-id 123456789 --src-dir ./README.md ./requirement
 
 Options:
 
-- `--session-id`: optional. Sandbox session ID used as the local
+- `--session-id` / `--sid`: optional. Sandbox session ID used as the local
   session key. If omitted, a UUID is generated and the command creates a
   sandbox session through the same idempotent session ensure flow.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is

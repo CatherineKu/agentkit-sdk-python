@@ -332,6 +332,7 @@ def exec_command(
     session_id: Optional[str] = typer.Option(
         None,
         "--session-id",
+        "--sid",
         help=(
             "Sandbox session ID. Defaults to a generated UUID and creates "
             "a sandbox session when needed."

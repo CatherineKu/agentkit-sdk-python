@@ -1015,6 +1015,25 @@ def test_sandbox_command_group_is_registered() -> None:
     assert "web" in result.output
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["sandbox", "get", "--help"],
+        ["sandbox", "shell", "--help"],
+        ["sandbox", "web", "--help"],
+        ["sandbox", "exec", "--help"],
+    ],
+)
+def test_sandbox_session_id_options_accept_sid_alias(args) -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0
+    assert "--session-id" in result.output
+    assert "--sid" in result.output
+
+
 def test_sandbox_commands_are_not_registered_at_top_level() -> None:
     from agentkit.toolkit.cli.cli import app
 
