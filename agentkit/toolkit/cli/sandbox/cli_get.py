@@ -49,6 +49,7 @@ def get_command(
         None,
         "--session-id",
         "--sid",
+        "-s",
         help=(
             "Sandbox session ID to look up. Omit to return all local "
             "sandbox sessions after syncing the current tool."

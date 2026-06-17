@@ -587,6 +587,7 @@ def file_upload_command(
         ...,
         "--session-id",
         "--sid",
+        "-s",
         help="Sandbox session ID to upload into.",
     ),
     workspace: Optional[str] = typer.Option(
@@ -693,6 +694,7 @@ def file_download_command(
         ...,
         "--session-id",
         "--sid",
+        "-s",
         help="Sandbox session ID to download from.",
     ),
     workspace: Optional[str] = typer.Option(
@@ -810,6 +812,7 @@ def file_list_command(
         ...,
         "--session-id",
         "--sid",
+        "-s",
         help="Sandbox session ID to list files from.",
     ),
     workspace: Optional[str] = typer.Option(

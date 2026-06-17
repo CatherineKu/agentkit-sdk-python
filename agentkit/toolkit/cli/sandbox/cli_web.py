@@ -59,6 +59,7 @@ def web_command(
         ...,
         "--session-id",
         "--sid",
+        "-s",
         help="Sandbox session ID to open in a browser.",
     ),
     tool_id: Optional[str] = typer.Option(

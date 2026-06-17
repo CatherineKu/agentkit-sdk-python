@@ -47,6 +47,7 @@ def shell_command(
         None,
         "--session-id",
         "--sid",
+        "-s",
         help=(
             "Sandbox session ID. Defaults to a generated UUID and creates "
             "a sandbox session when needed."
