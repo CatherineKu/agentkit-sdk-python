@@ -32,13 +32,16 @@ from agentkit.toolkit.cli.sandbox.model_config import (
     CODE_ENV_HOME,
     CODEX_CONFIG_TOML_ENV,
     CODEX_MODEL_CATALOG_JSON_ENV,
-    DEFAULT_ANTHROPIC_BASE_URL,
-    DEFAULT_MODEL_BASE_URL,
-    DEFAULT_MODEL_NAME,
+    DEFAULT_MODEL_PROVIDER,
+    ModelProviderType,
     MODEL_API_KEY_ENV,
     MODEL_API_KEY_ENV_KEYS,
     MODEL_BASE_URL_ENV_KEYS,
     MODEL_NAME_ENV_KEYS,
+    MODEL_PROVIDER_ENV,
+    get_model_provider_config,
+    normalize_model_provider,
+    resolve_model_name,
     build_codex_config_toml as _shared_build_codex_config_toml,
     build_codex_model_catalog_json as _shared_build_codex_model_catalog_json,
 )
@@ -63,6 +66,11 @@ DISABLED_SERVICE_ENV_KEYS = (
     "DISABLE_JUPYTER",
     "DISABLE_CODE_SERVER",
     "DISABLE_NODEJS_REPL",
+)
+BROWSER_EXTRA_ARGS_ENV = "BROWSER_EXTRA_ARGS"
+DEFAULT_BROWSER_EXTRA_ARGS = (
+    "--enable-unsafe-swiftshader --use-gl=angle "
+    "--use-angle=swiftshader-webgl --ignore-gpu-blocklist"
 )
 TOOL_READY_STATUS = "Ready"
 TOOL_FAILED_STATUSES = {"Error", "Failed", "CreateFailed", "Deleting", "Deleted"}
@@ -118,17 +126,24 @@ def _append_tool_envs(
     )
 
 
-def _build_codex_config_toml(model_name: str) -> str:
-    return _shared_build_codex_config_toml(model_name)
+def _build_codex_config_toml(
+    model_name: str,
+    model_provider: str | ModelProviderType | None = None,
+) -> str:
+    return _shared_build_codex_config_toml(model_name, model_provider)
 
 
-def _build_codex_model_catalog_json(model_name: str) -> str:
-    return _shared_build_codex_model_catalog_json(model_name)
+def _build_codex_model_catalog_json(
+    model_name: str,
+    model_provider: str | ModelProviderType | None = None,
+) -> str:
+    return _shared_build_codex_model_catalog_json(model_name, model_provider)
 
 
 def _append_code_env_tool_envs(
     envs: list[tools_types.EnvsItemForCreateTool],
     model_name: str,
+    model_provider: str | ModelProviderType | None,
 ) -> None:
     envs.extend(
         [
@@ -146,11 +161,11 @@ def _append_code_env_tool_envs(
             ),
             tools_types.EnvsItemForCreateTool(
                 Key=CODEX_CONFIG_TOML_ENV,
-                Value=_build_codex_config_toml(model_name),
+                Value=_build_codex_config_toml(model_name, model_provider),
             ),
             tools_types.EnvsItemForCreateTool(
                 Key=CODEX_MODEL_CATALOG_JSON_ENV,
-                Value=_build_codex_model_catalog_json(model_name),
+                Value=_build_codex_model_catalog_json(model_name, model_provider),
             ),
         ]
     )
@@ -161,25 +176,30 @@ def _build_tool_model_envs(
     tool_type: str,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
+    model_provider: str | ModelProviderType | None = DEFAULT_MODEL_PROVIDER,
 ) -> list[tools_types.EnvsItemForCreateTool] | None:
     envs: list[tools_types.EnvsItemForCreateTool] = []
-    resolved_model_name = (model_name or "").strip() or DEFAULT_MODEL_NAME
+    provider_config = get_model_provider_config(model_provider)
+    resolved_model_provider = normalize_model_provider(model_provider)
+    resolved_model_name = resolve_model_name(model_name, model_provider)
     resolved_model_api_key = model_api_key or os.getenv(MODEL_API_KEY_ENV)
+    _append_tool_envs(envs, (MODEL_PROVIDER_ENV,), resolved_model_provider)
     _append_tool_envs(envs, MODEL_NAME_ENV_KEYS, resolved_model_name)
     _append_tool_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
     _append_tool_envs(
         envs,
         MODEL_BASE_URL_ENV_KEYS,
-        DEFAULT_MODEL_BASE_URL,
+        provider_config.model_base_url,
     )
     _append_tool_envs(
         envs,
         ANTHROPIC_BASE_URL_ENV_KEYS,
-        DEFAULT_ANTHROPIC_BASE_URL,
+        provider_config.anthropic_base_url,
     )
     _append_tool_envs(envs, DISABLED_SERVICE_ENV_KEYS, "true")
+    _append_tool_envs(envs, (BROWSER_EXTRA_ARGS_ENV,), DEFAULT_BROWSER_EXTRA_ARGS)
     if tool_type.strip() == DEFAULT_CREATE_TOOL_TYPE:
-        _append_code_env_tool_envs(envs, resolved_model_name)
+        _append_code_env_tool_envs(envs, resolved_model_name, model_provider)
     return envs or None
 
 
@@ -192,6 +212,7 @@ def _build_create_tool_request(
     cpu: int = DEFAULT_CPU,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
+    model_provider: str | ModelProviderType | None = DEFAULT_MODEL_PROVIDER,
 ) -> tools_types.CreateToolRequest:
     resolved_tool_type = tool_type.strip() or DEFAULT_CREATE_TOOL_TYPE
     resolved_name = (name or "").strip() or _generate_tool_name(resolved_tool_type)
@@ -218,6 +239,7 @@ def _build_create_tool_request(
             tool_type=resolved_tool_type,
             model_name=model_name,
             model_api_key=model_api_key,
+            model_provider=model_provider,
         ),
     )
 
@@ -329,7 +351,9 @@ def create_tool(
     cpu: int = DEFAULT_CPU,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
+    model_provider: str | ModelProviderType | None = DEFAULT_MODEL_PROVIDER,
 ) -> dict[str, object]:
+    resolved_model_provider = normalize_model_provider(model_provider)
     region = _resolve_region(SANDBOX_REGION_ENV, "agentkit")
     tos_region = _resolve_region(SANDBOX_TOS_REGION_ENV, "tos")
     request = _build_create_tool_request(
@@ -340,6 +364,7 @@ def create_tool(
         cpu=cpu,
         model_name=model_name,
         model_api_key=model_api_key,
+        model_provider=resolved_model_provider,
     )
     client = AgentkitToolsClient(
         region=region,
@@ -354,6 +379,7 @@ def create_tool(
         "tool_type": final_tool.tool_type or request.tool_type,
         "name": final_tool.name or request.name,
         "status": final_tool.status or TOOL_READY_STATUS,
+        "model_provider": resolved_model_provider,
     }
 
 
@@ -398,6 +424,11 @@ def create_command(
             "and ANTHROPIC_AUTH_TOKEN when creating a tool."
         ),
     ),
+    model_provider: ModelProviderType = typer.Option(
+        ModelProviderType.MODEL_SQUARE,
+        "--model-provider",
+        help="Model provider to use for base URLs, defaults, and model catalog.",
+    ),
 ) -> None:
     """Create an AgentKit Tool with optional TOS mount."""
     try:
@@ -408,6 +439,7 @@ def create_command(
             cpu=cpu,
             model_name=model_name,
             model_api_key=model_api_key,
+            model_provider=model_provider.value,
         )
         save_tool_result(str(result["tool_type"]), result)
     except (typer.Abort, typer.Exit):

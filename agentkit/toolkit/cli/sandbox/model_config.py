@@ -16,7 +16,10 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from enum import Enum
 import json
+from typing import Optional
 
 MODEL_NAME_ENV_KEYS = ("OPENCODE_MODEL", "CODEX_MODEL", "ANTHROPIC_MODEL")
 MODEL_API_KEY_ENV_KEYS = (
@@ -31,35 +34,192 @@ MODEL_BASE_URL_ENV_KEYS = (
 )
 ANTHROPIC_BASE_URL_ENV_KEYS = ("ANTHROPIC_BASE_URL",)
 MODEL_API_KEY_ENV = "MODEL_API_KEY"
+MODEL_PROVIDER_ENV = "AGENTKIT_SANDBOX_MODEL_PROVIDER"
 
 CODE_ENV_HOME = "/home/gem"
 CODE_ENV_CODEX_HOME = "/home/gem/.codex"
 CODEX_CONFIG_TOML_ENV = "CODEX_CONFIG_TOML"
 CODEX_MODEL_CATALOG_JSON_ENV = "CODEX_MODEL_CATALOG_JSON"
 CODEX_MODEL_CATALOG_PATH = f"{CODE_ENV_CODEX_HOME}/model-catalog.json"
-DEFAULT_MODEL_NAME = "deepseek-v4-flash-260425"
-DEFAULT_MODEL_NAME_LIST = (
-    DEFAULT_MODEL_NAME,
-    "deepseek-v4-pro-260425",
-    "doubao-seed-2-0-pro-260215",
-)
+
+
+class ModelProviderType(str, Enum):
+    MODEL_SQUARE = "model_square"
+    CODING_PLAN = "coding_plan"
+    AGENT_PLAN = "agent_plan"
+
+
+@dataclass(frozen=True)
+class ModelSpec:
+    supports_reasoning_summaries: bool
+    context_window: int
+
+
+@dataclass(frozen=True)
+class ModelProviderConfig:
+    model_base_url: str
+    anthropic_base_url: str
+    default_model_name: str
+    models: dict[str, ModelSpec]
+
+
 DEFAULT_MODEL_CONTEXT_WINDOW = 1000000
-MODEL_CONTEXT_WINDOW_OVERRIDES = {
-    "doubao-seed-2-0-pro-260215": 256000,
+DEFAULT_MODEL_PROVIDER = ModelProviderType.MODEL_SQUARE.value
+
+MODEL_PROVIDER_CONFIGS: dict[str, ModelProviderConfig] = {
+    ModelProviderType.MODEL_SQUARE.value: ModelProviderConfig(
+        model_base_url="https://ark.cn-beijing.volces.com/api/v3",
+        anthropic_base_url="https://ark.cn-beijing.volces.com/api/compatible",
+        default_model_name="deepseek-v4-flash-260425",
+        models={
+            "doubao-seed-2-0-pro-260215": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=256000,
+            ),
+            "deepseek-v4-flash-260425": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "deepseek-v4-pro-260425": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "glm-4-7-251222": ModelSpec(
+                supports_reasoning_summaries=False,
+                context_window=200000,
+            ),
+        },
+    ),
+    ModelProviderType.CODING_PLAN.value: ModelProviderConfig(
+        model_base_url="https://ark.cn-beijing.volces.com/api/coding/v3",
+        anthropic_base_url="https://ark.cn-beijing.volces.com/api/coding",
+        default_model_name="deepseek-v4-flash",
+        models={
+            "doubao-seed-2.0-pro": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=256000,
+            ),
+            "deepseek-v4-flash": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "deepseek-v4-pro": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "glm-5.2": ModelSpec(
+                supports_reasoning_summaries=False,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+        },
+    ),
+    ModelProviderType.AGENT_PLAN.value: ModelProviderConfig(
+        model_base_url="https://ark.cn-beijing.volces.com/api/plan/v3",
+        anthropic_base_url="https://ark.cn-beijing.volces.com/api/plan",
+        default_model_name="deepseek-v4-flash",
+        models={
+            "doubao-seed-2.0-pro": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=256000,
+            ),
+            "deepseek-v4-flash": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "deepseek-v4-pro": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "glm-5.2": ModelSpec(
+                supports_reasoning_summaries=False,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+        },
+    ),
 }
-DEFAULT_MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-DEFAULT_ANTHROPIC_BASE_URL = "https://ark.cn-beijing.volces.com/api/compatible"
+
+DEFAULT_MODEL_NAME = MODEL_PROVIDER_CONFIGS[
+    DEFAULT_MODEL_PROVIDER
+].default_model_name
+DEFAULT_MODEL_NAME_LIST = tuple(
+    dict.fromkeys(
+        (
+            DEFAULT_MODEL_NAME,
+            *MODEL_PROVIDER_CONFIGS[DEFAULT_MODEL_PROVIDER].models,
+        )
+    )
+)
+DEFAULT_MODEL_BASE_URL = MODEL_PROVIDER_CONFIGS[
+    DEFAULT_MODEL_PROVIDER
+].model_base_url
+DEFAULT_ANTHROPIC_BASE_URL = MODEL_PROVIDER_CONFIGS[
+    DEFAULT_MODEL_PROVIDER
+].anthropic_base_url
+
+
+def _model_provider_value(
+    model_provider: str | ModelProviderType | None,
+) -> Optional[str]:
+    if isinstance(model_provider, ModelProviderType):
+        return model_provider.value
+    return model_provider
+
+
+def normalize_model_provider(
+    model_provider: str | ModelProviderType | None,
+) -> str:
+    resolved = (_model_provider_value(model_provider) or DEFAULT_MODEL_PROVIDER).strip()
+    if resolved not in MODEL_PROVIDER_CONFIGS:
+        allowed = ", ".join(MODEL_PROVIDER_CONFIGS)
+        raise ValueError(f"--model-provider must be one of: {allowed}")
+    return resolved
+
+
+def get_model_provider_config(
+    model_provider: str | ModelProviderType | None,
+) -> ModelProviderConfig:
+    return MODEL_PROVIDER_CONFIGS[normalize_model_provider(model_provider)]
+
+
+def model_provider_from_env_value(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+
+    resolved = value.strip()
+    if not resolved:
+        return None
+
+    try:
+        return normalize_model_provider(resolved)
+    except ValueError:
+        return None
+
+
+def resolve_model_name(
+    model_name: Optional[str],
+    model_provider: str | ModelProviderType | None,
+) -> str:
+    resolved_provider = normalize_model_provider(model_provider)
+    config = MODEL_PROVIDER_CONFIGS[resolved_provider]
+    resolved_model_name = (model_name or "").strip() or config.default_model_name
+    return resolved_model_name
 
 
 def _toml_quote(value: str) -> str:
     return json.dumps(value, ensure_ascii=False)
 
 
-def build_codex_config_toml(model_name: str) -> str:
-    quoted_model = _toml_quote(model_name)
+def build_codex_config_toml(
+    model_name: str,
+    model_provider: str | ModelProviderType | None = None,
+) -> str:
+    resolved_provider = normalize_model_provider(model_provider)
+    config = MODEL_PROVIDER_CONFIGS[resolved_provider]
+    resolved_model_name = resolve_model_name(model_name, resolved_provider)
+    quoted_model = _toml_quote(resolved_model_name)
     return "\n".join(
         [
-            'model_provider = "codex"',
+            f"model_provider = {_toml_quote(resolved_provider)}",
             f"model = {quoted_model}",
             f"review_model = {quoted_model}",
             'approval_policy = "never"',
@@ -76,9 +236,9 @@ def build_codex_config_toml(model_name: str) -> str:
             ),
             '"""',
             "",
-            "[model_providers.codex]",
-            'name = "codex"',
-            f"base_url = {_toml_quote(DEFAULT_MODEL_BASE_URL)}",
+            f"[model_providers.{resolved_provider}]",
+            f"name = {_toml_quote(resolved_provider)}",
+            f"base_url = {_toml_quote(config.model_base_url)}",
             'wire_api = "responses"',
             'env_key = "CODEX_API_KEY"',
             "",
@@ -95,31 +255,35 @@ def build_codex_config_toml(model_name: str) -> str:
     )
 
 
-def _build_model_catalog_item(model_name: str, max_context_window: int) -> dict:
+def _reasoning_levels() -> list[dict[str, str]]:
+    return [
+        {
+            "effort": "low",
+            "description": "Fast responses with lighter reasoning",
+        },
+        {
+            "effort": "medium",
+            "description": "Balances speed and reasoning depth",
+        },
+        {
+            "effort": "high",
+            "description": "Greater reasoning depth",
+        },
+    ]
+
+
+def _build_model_catalog_item(model_name: str, spec: ModelSpec) -> dict:
     return {
         "slug": model_name,
         "display_name": model_name,
-        "supported_reasoning_levels": [
-            {
-                "effort": "low",
-                "description": "Fast responses with lighter reasoning",
-            },
-            {
-                "effort": "medium",
-                "description": "Balances speed and reasoning depth",
-            },
-            {
-                "effort": "high",
-                "description": "Greater reasoning depth",
-            },
-        ],
-        "max_context_window": max_context_window,
+        "supported_reasoning_levels": _reasoning_levels(),
+        "max_context_window": spec.context_window,
         "shell_type": "shell_command",
         "visibility": "list",
         "supported_in_api": True,
         "priority": 100,
         "base_instructions": "",
-        "supports_reasoning_summaries": True,
+        "supports_reasoning_summaries": spec.supports_reasoning_summaries,
         "support_verbosity": False,
         "truncation_policy": {"mode": "tokens", "limit": 10000},
         "supports_parallel_tool_calls": False,
@@ -127,22 +291,34 @@ def _build_model_catalog_item(model_name: str, max_context_window: int) -> dict:
     }
 
 
-def model_catalog_context_window(model_name: str) -> int:
-    return MODEL_CONTEXT_WINDOW_OVERRIDES.get(
-        model_name,
-        DEFAULT_MODEL_CONTEXT_WINDOW,
-    )
+def model_catalog_context_window(
+    model_name: str,
+    model_provider: str | ModelProviderType | None = None,
+) -> int:
+    config = get_model_provider_config(model_provider)
+    spec = config.models.get(model_name)
+    if spec:
+        return spec.context_window
+    return DEFAULT_MODEL_CONTEXT_WINDOW
 
 
-def build_codex_model_catalog_json(model_name: str) -> str:
-    deduped_model_names = list(
-        dict.fromkeys((model_name, *DEFAULT_MODEL_NAME_LIST))
+def build_codex_model_catalog_json(
+    model_name: str,
+    model_provider: str | ModelProviderType | None = None,
+) -> str:
+    resolved_provider = normalize_model_provider(model_provider)
+    config = MODEL_PROVIDER_CONFIGS[resolved_provider]
+    resolved_model_name = resolve_model_name(model_name, resolved_provider)
+    deduped_model_names = list(dict.fromkeys((resolved_model_name, *config.models)))
+    fallback_spec = ModelSpec(
+        supports_reasoning_summaries=True,
+        context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
     )
     payload = {
         "models": [
             _build_model_catalog_item(
                 name,
-                model_catalog_context_window(name),
+                config.models.get(name, fallback_spec),
             )
             for name in deduped_model_names
         ]

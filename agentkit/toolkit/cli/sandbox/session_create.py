@@ -24,13 +24,20 @@ from typing import Optional
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.model_config import (
+    ANTHROPIC_BASE_URL_ENV_KEYS,
     CODEX_CONFIG_TOML_ENV,
     CODEX_MODEL_CATALOG_JSON_ENV,
     MODEL_API_KEY_ENV,
     MODEL_API_KEY_ENV_KEYS,
+    MODEL_BASE_URL_ENV_KEYS,
     MODEL_NAME_ENV_KEYS,
+    MODEL_PROVIDER_ENV,
+    ModelProviderType,
     build_codex_config_toml,
     build_codex_model_catalog_json,
+    get_model_provider_config,
+    normalize_model_provider,
+    resolve_model_name,
 )
 from agentkit.toolkit.cli.sandbox.session_sync import (
     session_info_to_result,
@@ -73,6 +80,7 @@ def _append_envs(
 def _append_codex_config_envs(
     envs: list[tools_types.EnvsItemForCreateSession],
     model_name: Optional[str],
+    model_provider: str | ModelProviderType | None,
 ) -> None:
     resolved_model_name = (model_name or "").strip()
     if not resolved_model_name:
@@ -82,11 +90,17 @@ def _append_codex_config_envs(
         [
             tools_types.EnvsItemForCreateSession(
                 key=CODEX_CONFIG_TOML_ENV,
-                value=build_codex_config_toml(resolved_model_name),
+                value=build_codex_config_toml(
+                    resolved_model_name,
+                    model_provider,
+                ),
             ),
             tools_types.EnvsItemForCreateSession(
                 key=CODEX_MODEL_CATALOG_JSON_ENV,
-                value=build_codex_model_catalog_json(resolved_model_name),
+                value=build_codex_model_catalog_json(
+                    resolved_model_name,
+                    model_provider,
+                ),
             ),
         ]
     )
@@ -96,14 +110,43 @@ def build_model_envs(
     *,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
+    model_provider: str | ModelProviderType | None = None,
     include_codex_config: bool = False,
 ) -> list[tools_types.EnvsItemForCreateSession] | None:
     envs: list[tools_types.EnvsItemForCreateSession] = []
-    resolved_model_name = (model_name or "").strip()
+    has_model_provider = bool(
+        model_provider.value if isinstance(model_provider, ModelProviderType)
+        else (model_provider or "").strip()
+    )
+    resolved_model_provider = (
+        normalize_model_provider(model_provider) if has_model_provider else None
+    )
+    resolved_model_name = (
+        resolve_model_name(model_name, resolved_model_provider)
+        if resolved_model_provider
+        else (model_name or "").strip()
+    )
+    provider_config = (
+        get_model_provider_config(resolved_model_provider)
+        if resolved_model_provider
+        else None
+    )
     resolved_model_api_key = model_api_key or os.getenv(MODEL_API_KEY_ENV)
+    _append_envs(envs, (MODEL_PROVIDER_ENV,), resolved_model_provider)
     _append_envs(envs, MODEL_NAME_ENV_KEYS, resolved_model_name)
-    if include_codex_config:
-        _append_codex_config_envs(envs, resolved_model_name)
+    if provider_config:
+        _append_envs(envs, MODEL_BASE_URL_ENV_KEYS, provider_config.model_base_url)
+        _append_envs(
+            envs,
+            ANTHROPIC_BASE_URL_ENV_KEYS,
+            provider_config.anthropic_base_url,
+        )
+    if include_codex_config and resolved_model_name:
+        _append_codex_config_envs(
+            envs,
+            resolved_model_name,
+            resolved_model_provider,
+        )
     _append_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
     return envs or None
 

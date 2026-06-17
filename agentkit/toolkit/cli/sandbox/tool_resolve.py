@@ -24,6 +24,10 @@ from typing import Optional
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.sandbox.model_config import (
+    MODEL_PROVIDER_ENV,
+    model_provider_from_env_value,
+)
 from agentkit.toolkit.cli.sandbox.utils import error
 
 SANDBOX_TOOL_STORE_PATH = Path(".agentkit") / "sandbox" / "tools.json"
@@ -92,18 +96,39 @@ def _get_tool_payload(response: object) -> object:
     return response
 
 
+def _get_tool_env_value(payload: object, key: str) -> object:
+    envs = _get_field_value(payload, "Envs", "envs") or []
+    if not isinstance(envs, list):
+        return None
+
+    for env in envs:
+        env_key = _get_field_value(env, "Key", "key")
+        if env_key == key:
+            return _get_field_value(env, "Value", "value")
+    return None
+
+
+def _get_tool_model_provider(payload: object) -> str | None:
+    return model_provider_from_env_value(
+        _get_tool_env_value(payload, MODEL_PROVIDER_ENV)
+    )
+
+
 def _build_tool_record(tool: object, tool_type: str) -> dict[str, object] | None:
     payload = _get_tool_payload(tool)
     tool_id = _get_string_field(payload, "ToolId", "tool_id")
     if not isinstance(tool_id, str) or not tool_id.strip():
         return None
-
-    return {
+    record = {
         "ToolId": tool_id.strip(),
         "ToolType": _get_field_value(payload, "ToolType", "tool_type") or tool_type,
         "Name": _get_field_value(payload, "Name", "name"),
         "Status": _get_field_value(payload, "Status", "status"),
     }
+    model_provider = _get_tool_model_provider(payload)
+    if model_provider:
+        record["ModelProvider"] = model_provider
+    return record
 
 
 def _get_string_value(result: dict[str, object], *keys: str) -> str | None:
@@ -205,12 +230,18 @@ def _normalize_tool_record(
     if not tool_id:
         error("Tool result missing ToolId")
 
-    return {
+    stored = {
         "ToolId": tool_id,
         "Name": _get_string_value(result, "Name", "name") or "",
         "Status": _get_string_value(result, "Status", "status") or "",
         "ToolType": resolved_tool_type,
     }
+    model_provider = model_provider_from_env_value(
+        _get_string_value(result, "ModelProvider", "model_provider")
+    )
+    if model_provider:
+        stored["ModelProvider"] = model_provider
+    return stored
 
 
 def save_tool_result(tool_type: str, result: dict[str, object]) -> None:
@@ -238,6 +269,39 @@ def find_tool_result(tool_type: str) -> dict[str, object] | None:
         error(f"Invalid sandbox tool record: {resolved_tool_type}")
 
     return result
+
+
+def find_tool_model_provider(
+    *,
+    tool_id: Optional[str],
+    tool_type: str | SandboxToolType | None,
+) -> str | None:
+    result = find_tool_result(normalize_tool_type(tool_type))
+    if not result:
+        return None
+
+    cached_tool_id = _get_string_value(result, "ToolId", "tool_id")
+    if tool_id and cached_tool_id != tool_id:
+        return None
+    return model_provider_from_env_value(
+        _get_string_value(result, "ModelProvider", "model_provider")
+    )
+
+
+def get_remote_tool_model_provider(
+    client: AgentkitToolsClient,
+    tool_id: str,
+    *,
+    tool_type: str | SandboxToolType | None,
+) -> str | None:
+    response = client.get_tool(tools_types.GetToolRequest(tool_id=tool_id))
+    record = _build_tool_record(response, normalize_tool_type(tool_type))
+    if record:
+        save_tool_result(normalize_tool_type(tool_type), record)
+        return model_provider_from_env_value(
+            _get_string_value(record, "ModelProvider", "model_provider")
+        )
+    return None
 
 
 def _get_cached_tool_id(tool_type: str) -> str | None:

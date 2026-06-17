@@ -24,6 +24,10 @@ runner = CliRunner()
 _PLACEHOLDER_A = "example-value-a"
 _PLACEHOLDER_B = "example-value-b"
 _PLACEHOLDER_MODEL_VALUE = "example-model-value"
+_DEFAULT_BROWSER_EXTRA_ARGS = (
+    "--enable-unsafe-swiftshader --use-gl=angle "
+    "--use-angle=swiftshader-webgl --ignore-gpu-blocklist"
+)
 
 
 @pytest.fixture
@@ -212,6 +216,7 @@ def test_create_command_skips_tos_mount_by_default(
             "Name": "demo-tool",
             "Status": "Ready",
             "ToolType": "SkillEnv",
+            "ModelProvider": "model_square",
         }
     }
 
@@ -389,6 +394,7 @@ def test_create_command_help_omits_model_base_url_option():
     result = runner.invoke(app, ["sandbox", "create", "--help"])
 
     assert result.exit_code == 0
+    assert "--model-provider" in result.output
     assert "--model-base-url" not in result.output
 
 
@@ -520,14 +526,15 @@ def test_build_create_tool_request_adds_model_envs(monkeypatch):
         name="demo-tool",
         tos_bucket="my-bucket",
         tos_region="cn-beijing",
-        model_name="claude-sonnet-4",
+        model_name="deepseek-v4-pro-260425",
         **{"model_" + "api_key": _PLACEHOLDER_MODEL_VALUE},
     )
 
     assert [(item.key, item.value) for item in request.envs] == [
-        ("OPENCODE_MODEL", "claude-sonnet-4"),
-        ("CODEX_MODEL", "claude-sonnet-4"),
-        ("ANTHROPIC_MODEL", "claude-sonnet-4"),
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "model_square"),
+        ("OPENCODE_MODEL", "deepseek-v4-pro-260425"),
+        ("CODEX_MODEL", "deepseek-v4-pro-260425"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-pro-260425"),
         ("OPENCODE_API_KEY", _PLACEHOLDER_MODEL_VALUE),
         ("CODEX_API_KEY", _PLACEHOLDER_MODEL_VALUE),
         ("ANTHROPIC_AUTH_TOKEN", _PLACEHOLDER_MODEL_VALUE),
@@ -541,6 +548,7 @@ def test_build_create_tool_request_adds_model_envs(monkeypatch):
         ("DISABLE_JUPYTER", "true"),
         ("DISABLE_CODE_SERVER", "true"),
         ("DISABLE_NODEJS_REPL", "true"),
+        ("BROWSER_EXTRA_ARGS", _DEFAULT_BROWSER_EXTRA_ARGS),
     ]
 
 
@@ -555,16 +563,17 @@ def test_build_create_tool_request_adds_code_env_config_envs(monkeypatch):
         name="demo-tool",
         tos_bucket="my-bucket",
         tos_region="cn-beijing",
-        model_name="claude-sonnet-4",
+        model_name="deepseek-v4-pro-260425",
     )
 
     envs = {item.key: item.value for item in request.envs}
+    assert envs["BROWSER_EXTRA_ARGS"] == _DEFAULT_BROWSER_EXTRA_ARGS
     assert envs["OPENCODE_DISABLE_AUTOUPDATE"] == "1"
     assert envs["HOME"] == "/home/gem"
     assert envs["CODEX_HOME"] == "/home/gem/.codex"
     config_toml = envs["CODEX_CONFIG_TOML"]
-    assert 'model = "claude-sonnet-4"' in config_toml
-    assert 'review_model = "claude-sonnet-4"' in config_toml
+    assert 'model = "deepseek-v4-pro-260425"' in config_toml
+    assert 'review_model = "deepseek-v4-pro-260425"' in config_toml
     assert 'model = "deepseek-v4-flash-260425"' not in config_toml
     assert (
         'model_catalog_json = "/home/gem/.codex/model-catalog.json"'
@@ -597,11 +606,88 @@ def test_build_create_tool_request_adds_code_env_config_envs(monkeypatch):
     assert "\n  " in catalog_json
     catalog = json.loads(catalog_json)
     models = catalog["models"]
-    assert models[0]["slug"] == "claude-sonnet-4"
-    assert models[0]["display_name"] == "claude-sonnet-4"
+    assert models[0]["slug"] == "deepseek-v4-pro-260425"
+    assert models[0]["display_name"] == "deepseek-v4-pro-260425"
     assert "deepseek-v4-flash-260425" in [model["slug"] for model in models]
     assert "doubao-seed-2-0-pro-260215" in [model["slug"] for model in models]
     assert models[0]["truncation_policy"] == {"mode": "tokens", "limit": 10000}
+
+
+def test_build_create_tool_request_uses_model_provider(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="CodeEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="cn-beijing",
+        model_provider="coding_plan",
+    )
+
+    envs = {item.key: item.value for item in request.envs}
+    assert envs["OPENCODE_MODEL"] == "deepseek-v4-flash"
+    assert envs["CODEX_MODEL"] == "deepseek-v4-flash"
+    assert envs["ANTHROPIC_MODEL"] == "deepseek-v4-flash"
+    assert envs["OPENCODE_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/coding/v3"
+    )
+    assert envs["CODEX_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/coding/v3"
+    )
+    assert envs["MODEL_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/coding/v3"
+    )
+    assert envs["ANTHROPIC_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/coding"
+    )
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+
+    catalog = json.loads(envs["CODEX_MODEL_CATALOG_JSON"])
+    models = {model["slug"]: model for model in catalog["models"]}
+    assert "deepseek-v4-flash" in models
+    assert "deepseek-v4-flash-260425" not in models
+    assert models["glm-5.2"]["supports_reasoning_summaries"] is False
+    glm_reasoning_levels = models["glm-5.2"]["supported_reasoning_levels"]
+    assert [level["effort"] for level in glm_reasoning_levels] == [
+        "low",
+        "medium",
+        "high",
+    ]
+
+
+def test_build_create_tool_request_allows_custom_model_name(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="CodeEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="cn-beijing",
+        model_provider="agent_plan",
+        model_name="deepseek-v4-flash-260428",
+    )
+
+    envs = {item.key: item.value for item in request.envs}
+    assert envs["OPENCODE_MODEL"] == "deepseek-v4-flash-260428"
+    assert envs["CODEX_MODEL"] == "deepseek-v4-flash-260428"
+    assert envs["ANTHROPIC_MODEL"] == "deepseek-v4-flash-260428"
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+    catalog = json.loads(envs["CODEX_MODEL_CATALOG_JSON"])
+    assert catalog["models"][0]["slug"] == "deepseek-v4-flash-260428"
+    assert catalog["models"][0]["supports_reasoning_summaries"] is True
+    assert catalog["models"][0]["max_context_window"] == 1000000
 
 
 def test_build_create_tool_request_uses_model_api_key_env(monkeypatch):
@@ -692,6 +778,7 @@ def test_build_create_tool_request_adds_default_model_base_url(monkeypatch):
     )
 
     assert [(item.key, item.value) for item in request.envs] == [
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "model_square"),
         ("OPENCODE_MODEL", "deepseek-v4-flash-260425"),
         ("CODEX_MODEL", "deepseek-v4-flash-260425"),
         ("ANTHROPIC_MODEL", "deepseek-v4-flash-260425"),
@@ -705,6 +792,7 @@ def test_build_create_tool_request_adds_default_model_base_url(monkeypatch):
         ("DISABLE_JUPYTER", "true"),
         ("DISABLE_CODE_SERVER", "true"),
         ("DISABLE_NODEJS_REPL", "true"),
+        ("BROWSER_EXTRA_ARGS", _DEFAULT_BROWSER_EXTRA_ARGS),
     ]
 
 
