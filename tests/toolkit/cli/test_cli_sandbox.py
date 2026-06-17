@@ -2068,6 +2068,195 @@ def test_cli_shell_uploads_sources_before_command(monkeypatch, tmp_path) -> None
     assert payload["data"]["shell_id"] == "shell-1"
 
 
+def test_cli_shell_git_config_file_reuses_returned_shell_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    config_path = tmp_path / "git.json"
+    config_path.write_text(
+        json.dumps({"user": {"name": "Ada Lovelace", "email": "ada@example.com"}}),
+        encoding="utf-8",
+    )
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
+    events = []
+
+    def fake_exec_shell_command(session, command, *, shell_id="", **_kwargs):
+        events.append(("git-config", session, command, shell_id))
+        return {"data": {"session_id": "shell-from-git", "exit_code": 0}}
+
+    class FakeResponse:
+        text = '{"success": true}'
+
+        def json(self):
+            return {
+                "success": True,
+                "data": {
+                    "session_id": "shell-from-git",
+                    "status": "completed",
+                    "output": "done",
+                    "exit_code": 0,
+                },
+            }
+
+    def fake_post(url, json, timeout):
+        events.append(("post", url, json, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(git_config, "_exec_shell_command", fake_exec_shell_command)
+    monkeypatch.setattr(cli_shell.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--git-config",
+            str(config_path),
+            "--command",
+            "git status",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        (
+            "git-config",
+            stored_session,
+            "git config --global user.name 'Ada Lovelace'; "
+            "git config --global user.email ada@example.com",
+            "",
+        ),
+        (
+            "post",
+            "https://sandbox.example.com/v1/shell/exec",
+            {"id": "shell-from-git", "exec_dir": "", "command": "git status"},
+            cli_shell.SANDBOX_EXEC_TIMEOUT_SECONDS,
+        ),
+    ]
+    payload = json.loads(result.output)
+    assert payload["data"]["shell_id"] == "shell-from-git"
+
+
+def test_cli_shell_git_config_missing_file_errors(monkeypatch, tmp_path) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
+
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
+    posted = {"value": False}
+    monkeypatch.setattr(
+        cli_shell.requests,
+        "post",
+        lambda *_args, **_kwargs: posted.update(value=True),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--git-config",
+            str(tmp_path / "missing.ini"),
+            "--command",
+            "git status",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Git config file not found" in result.output
+    assert posted["value"] is False
+
+
+def test_resolve_git_config_local_reads_git_values(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    calls = []
+
+    class FakeCompletedProcess:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        if args == ["git", "config", "--list"]:
+            return FakeCompletedProcess(
+                stdout="user.name=Ada Lovelace\nuser.email=ada@example.com\n"
+            )
+        if args == ["git", "config", "--get", "user.name"]:
+            return FakeCompletedProcess(stdout="Ada Lovelace\n")
+        if args == ["git", "config", "--get", "user.email"]:
+            return FakeCompletedProcess(stdout="ada@example.com\n")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(git_config.shutil, "which", lambda _name: "/usr/bin/git")
+    monkeypatch.setattr(git_config.subprocess, "run", fake_run)
+
+    assert git_config.resolve_git_config("local") == (
+        "Ada Lovelace",
+        "ada@example.com",
+    )
+    assert calls == [
+        ["git", "config", "--list"],
+        ["git", "config", "--get", "user.name"],
+        ["git", "config", "--get", "user.email"],
+    ]
+
+
+def test_resolve_git_config_local_rejects_empty_git_config(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    class FakeCompletedProcess:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    monkeypatch.setattr(git_config.shutil, "which", lambda _name: "/usr/bin/git")
+    monkeypatch.setattr(
+        git_config.subprocess,
+        "run",
+        lambda *_args, **_kwargs: FakeCompletedProcess(),
+    )
+
+    with pytest.raises(ValueError, match="Local git config is empty"):
+        git_config.resolve_git_config("local")
+
+
+def test_resolve_git_config_ini_supports_flat_user_keys(tmp_path) -> None:
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    config_path = tmp_path / "gitconfig"
+    config_path.write_text(
+        "user.name = Ada Lovelace\nuser.email = ada@example.com\n",
+        encoding="utf-8",
+    )
+
+    assert git_config.resolve_git_config(str(config_path)) == (
+        "Ada Lovelace",
+        "ada@example.com",
+    )
+
+
 def test_cli_shell_rejects_extra_source_without_src_dir(
     monkeypatch,
     tmp_path,
@@ -2262,6 +2451,73 @@ def test_cli_exec_runs_command_option(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws?token=abc"
     assert captured["initial_command"] == "codex"
+
+
+def test_cli_exec_git_config_file_does_not_reuse_shell_exec_id_for_ws(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    config_path = tmp_path / "git.toml"
+    config_path.write_text(
+        '[user]\nname = "Ada Lovelace"\nemail = "ada@example.com"\n',
+        encoding="utf-8",
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
+    captured = {}
+
+    def fake_exec_shell_command(session, command, *, shell_id="", **_kwargs):
+        captured["git_config"] = (session, command, shell_id)
+        return {"data": {"session_id": "shell-from-git", "exit_code": 0}}
+
+    def fake_connect(ws_url, initial_command, on_shell_id=None):
+        captured["ws_url"] = ws_url
+        captured["initial_command"] = initial_command
+        captured["on_shell_id"] = on_shell_id
+
+    monkeypatch.setattr(git_config, "_exec_shell_command", fake_exec_shell_command)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--git-config",
+            str(config_path),
+            "--command",
+            "codex",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["git_config"] == (
+        stored_session,
+        "git config --global user.name 'Ada Lovelace'; "
+        "git config --global user.email ada@example.com",
+        "",
+    )
+    assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws?token=abc"
+    assert captured["initial_command"] == "codex"
+    assert captured["on_shell_id"] is not None
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert "terminal_shell_id" not in stored["user-1"]
 
 
 def test_cli_exec_uploads_directory_before_connecting(

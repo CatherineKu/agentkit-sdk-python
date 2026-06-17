@@ -46,6 +46,7 @@ from agentkit.toolkit.cli.sandbox.session_create import (
     build_model_envs,
     ensure_sandbox_session,
 )
+from agentkit.toolkit.cli.sandbox.git_config import apply_git_config_to_session
 from agentkit.toolkit.cli.sandbox.tool_resolve import SandboxToolType
 from agentkit.toolkit.cli.sandbox.utils import (
     add_session_terminal_shell_id,
@@ -385,6 +386,14 @@ def exec_command(
             "to --workspace."
         ),
     ),
+    git_config: Optional[str] = typer.Option(
+        None,
+        "--git-config",
+        help=(
+            "Git identity source. Use 'local' to read local git config, or "
+            "provide an INI/TOML/JSON file path with user.name and user.email."
+        ),
+    ),
     model_name: Optional[str] = typer.Option(
         None,
         "--model-name",
@@ -437,9 +446,6 @@ def exec_command(
     except Exception as exc:
         error(str(exc))
 
-    ws_url = build_terminal_ws_url(session.get("endpoint"), shell_id=shell_id)
-    initial_command = command
-
     cleanup_shell_ids: list[str] = []
     cleanup_shell_ids_lock = threading.Lock()
 
@@ -448,9 +454,24 @@ def exec_command(
             if remote_shell_id not in cleanup_shell_ids:
                 cleanup_shell_ids.append(remote_shell_id)
 
-    if shell_id:
-        add_session_terminal_shell_id(session_id, shell_id)
-        remember_cleanup_shell_id(shell_id)
+    active_shell_id = shell_id
+    try:
+        apply_git_config_to_session(
+            session,
+            git_config,
+            shell_id=active_shell_id or "",
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
+
+    if active_shell_id:
+        add_session_terminal_shell_id(session_id, active_shell_id)
+        remember_cleanup_shell_id(active_shell_id)
+
+    ws_url = build_terminal_ws_url(session.get("endpoint"), shell_id=active_shell_id)
+    initial_command = command
 
     def on_shell_id(remote_shell_id: str) -> None:
         add_session_terminal_shell_id(session_id, remote_shell_id)

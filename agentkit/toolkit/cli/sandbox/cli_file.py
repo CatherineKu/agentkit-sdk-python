@@ -193,11 +193,13 @@ def _exec_shell_command(
     session: dict[str, object],
     command: str,
     *,
+    shell_id: str = "",
+    exec_dir: str = "",
     quiet_errors: bool = False,
 ) -> dict[str, object]:
     response = requests.post(
         build_exec_url(session.get("endpoint")),
-        json={"id": "", "exec_dir": "", "command": command},
+        json={"id": shell_id, "exec_dir": exec_dir, "command": command},
         timeout=SANDBOX_EXEC_TIMEOUT_SECONDS,
     )
     payload = _json_response(response, "shell exec")

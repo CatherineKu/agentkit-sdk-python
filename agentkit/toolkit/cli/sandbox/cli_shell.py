@@ -31,6 +31,7 @@ from agentkit.toolkit.cli.sandbox.session_create import (
     SANDBOX_TOOL_ID_ENV,
     ensure_sandbox_session,
 )
+from agentkit.toolkit.cli.sandbox.git_config import apply_git_config_to_session
 from agentkit.toolkit.cli.sandbox.tool_resolve import SandboxToolType
 from agentkit.toolkit.cli.sandbox.utils import (
     SANDBOX_EXEC_TIMEOUT_SECONDS,
@@ -101,6 +102,14 @@ def shell_command(
             "to --workspace."
         ),
     ),
+    git_config: Optional[str] = typer.Option(
+        None,
+        "--git-config",
+        help=(
+            "Git identity source. Use 'local' to read local git config, or "
+            "provide an INI/TOML/JSON file path with user.name and user.email."
+        ),
+    ),
 ) -> None:
     """Execute a command in a sandbox shell."""
     try:
@@ -128,9 +137,23 @@ def shell_command(
     except Exception as exc:
         error(str(exc))
 
+    effective_shell_id = shell_id or ""
+    try:
+        resolved_shell_id = apply_git_config_to_session(
+            session,
+            git_config,
+            shell_id=effective_shell_id,
+        )
+        if resolved_shell_id:
+            effective_shell_id = resolved_shell_id
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
+
     url = build_exec_url(session.get("endpoint"))
     body = {
-        "id": shell_id or "",
+        "id": effective_shell_id,
         "exec_dir": exec_dir or "",
         "command": command,
     }
