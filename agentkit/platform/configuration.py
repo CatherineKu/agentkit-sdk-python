@@ -536,15 +536,22 @@ class VolcConfiguration:
         """
         Resolves region for a specific service.
         Priority:
-        1. Service-specific environment variable: VOLCENGINE_{SERVICE}_REGION
-        2. Service-specific config file: services.{service}.region
-        3. Logical region mapping: region_policy.rules.{logical_region}.{service}
-        4. Global environment variable: VOLCENGINE_REGION
-        5. Global config file: volcengine.region
-        6. Default: DEFAULT_REGION
+        1. Explicitly passed in constructor
+        2. Service-specific environment variable: VOLCENGINE_{SERVICE}_REGION
+        3. Service-specific config file: services.{service}.region
+        4. Logical region mapping: region_policy.rules.{logical_region}.{service}
+        5. Global environment variable: VOLCENGINE_REGION
+        6. Global config file: volcengine.region
+        7. Default: DEFAULT_REGION
         """
         key_lower = service_key.lower()
         key_upper = service_key.upper()
+
+        if self._region:
+            mapped_region = self._get_mapped_region(self._region, service_key)
+            if mapped_region:
+                return mapped_region
+            return self._region
 
         if self._provider == CloudProvider.BYTEPLUS:
             svc_region = os.getenv(f"BYTEPLUS_{key_upper}_REGION")

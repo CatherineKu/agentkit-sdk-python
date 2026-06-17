@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from typer.testing import CliRunner
@@ -146,12 +147,31 @@ class _FakeTOSService:
         )
 
 
+class _FakePlatformConfig:
+    endpoint_regions = {"agentkit": "cn-beijing", "tos": "cn-beijing"}
+
+    def get_service_endpoint(self, service_key):
+        return SimpleNamespace(region=self.endpoint_regions[service_key])
+
+
 def _reset_fake_tools_client():
     _FakeToolsClient.instances = []
     _FakeToolsClient.last_request = None
     _FakeToolsClient.get_statuses = ["Ready"]
     _FakeToolsClient.get_call_count = 0
     _FakeTOSService.instances = []
+    _FakePlatformConfig.endpoint_regions = {
+        "agentkit": "cn-beijing",
+        "tos": "cn-beijing",
+    }
+
+
+@pytest.fixture(autouse=True)
+def _use_platform_config(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "VolcConfiguration", _FakePlatformConfig)
 
 
 def test_create_command_skips_tos_mount_by_default(
@@ -201,8 +221,43 @@ def test_create_command_uses_region_envs(monkeypatch):
     from agentkit.toolkit.cli.sandbox import cli_create
 
     _reset_fake_tools_client()
+    _FakePlatformConfig.endpoint_regions = {
+        "agentkit": "platform-agentkit-region",
+        "tos": "platform-tos-region",
+    }
     monkeypatch.setenv("AGENTKIT_SANDBOX_REGION", " cn-shanghai ")
     monkeypatch.setenv("AGENTKIT_SANDBOX_TOS_REGION", " cn-guangzhou ")
+    monkeypatch.setattr(cli_create, "AgentkitToolsClient", _FakeToolsClient)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "create",
+            "--tool-name",
+            "demo-tool",
+            "--tos-bucket",
+            "my-bucket",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.instances[0].region == "cn-shanghai"
+    assert _FakeTOSService.instances[0].config.region == "cn-guangzhou"
+
+
+def test_create_command_falls_back_to_platform_regions(monkeypatch):
+    from agentkit.toolkit.cli.cli import app
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    _FakePlatformConfig.endpoint_regions = {
+        "agentkit": "cn-shanghai",
+        "tos": "cn-guangzhou",
+    }
+    monkeypatch.delenv("AGENTKIT_SANDBOX_REGION", raising=False)
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOS_REGION", raising=False)
     monkeypatch.setattr(cli_create, "AgentkitToolsClient", _FakeToolsClient)
     monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
 
@@ -303,7 +358,8 @@ def test_create_command_rejects_invalid_cpu(monkeypatch):
     )
 
     assert result.exit_code != 0
-    assert "--cpu must be one of: 2, 4, 8, 16" in result.output
+    assert "--cpu must be one of: 2, 4, 8" in result.output
+    assert "16" in result.output
     assert _FakeToolsClient.instances == []
     assert _FakeTOSService.instances == []
 

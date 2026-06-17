@@ -23,6 +23,7 @@ from typing import Optional
 
 import typer
 
+from agentkit.platform import VolcConfiguration
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.model_config import (
@@ -50,7 +51,6 @@ from agentkit.toolkit.volcengine.services.tos_service import (
 )
 from agentkit.utils.misc import generate_apikey_name, generate_random_id
 
-DEFAULT_CREATE_TOOL_REGION = "cn-beijing"
 SANDBOX_REGION_ENV = "AGENTKIT_SANDBOX_REGION"
 SANDBOX_TOS_REGION_ENV = "AGENTKIT_SANDBOX_TOS_REGION"
 DEFAULT_CREATE_TOOL_TYPE = "CodeEnv"
@@ -70,11 +70,11 @@ TOOL_WAIT_INTERVAL_SECONDS = 5
 TOOL_WAIT_TIMEOUT_SECONDS = 600
 
 
-def _resolve_region(env_var_name: str) -> str:
+def _resolve_region(env_var_name: str, service_key: str) -> str:
     env_region = (os.getenv(env_var_name) or "").strip()
     if env_region:
         return env_region
-    return DEFAULT_CREATE_TOOL_REGION
+    return VolcConfiguration().get_service_endpoint(service_key).region
 
 
 def _generate_tool_name(tool_type: str) -> str:
@@ -330,8 +330,8 @@ def create_tool(
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
 ) -> dict[str, object]:
-    region = _resolve_region(SANDBOX_REGION_ENV)
-    tos_region = _resolve_region(SANDBOX_TOS_REGION_ENV)
+    region = _resolve_region(SANDBOX_REGION_ENV, "agentkit")
+    tos_region = _resolve_region(SANDBOX_TOS_REGION_ENV, "tos")
     request = _build_create_tool_request(
         tool_type=tool_type,
         name=tool_name,
