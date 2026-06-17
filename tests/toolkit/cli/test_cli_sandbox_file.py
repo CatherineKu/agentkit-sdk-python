@@ -114,6 +114,9 @@ def test_sandbox_file_command_group_is_registered() -> None:
         assert "--session-id" in result.output or "Commands" in result.output
         if args[2:3] in (["upload"], ["download"]):
             assert "--sid" in result.output
+            assert "-s" in result.output
+        if args[2:3] == ["list"]:
+            assert "-s" in result.output
 
 
 def test_cli_file_upload_directory_creates_destination_and_extracts_archive(
@@ -1176,7 +1179,7 @@ def test_cli_file_list_posts_expected_payload(monkeypatch, tmp_path) -> None:
             "sandbox",
             "file",
             "list",
-            "--sid",
+            "-s",
             "user-1",
             "--workspace",
             "/home/gem",

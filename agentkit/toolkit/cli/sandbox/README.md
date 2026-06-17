@@ -38,9 +38,10 @@ python3 -m pip show agentkit-sdk-python
 
 ### Create
 
-Create an AgentKit Tool for sandbox sessions. This command prepares the backing
-TOS bucket/path, builds a `CreateTool` request, waits until the tool reaches
-`Ready`, and prints the created tool ID.
+Create an AgentKit Tool for sandbox sessions. This command builds a `CreateTool`
+request, waits until the tool reaches `Ready`, and prints the created tool ID.
+When `--tos-bucket` is provided, it also prepares the backing TOS bucket/path and
+mounts it into sandbox sessions.
 
 ```bash
 agentkit sandbox create \
@@ -55,13 +56,17 @@ Options:
 - `--tool-name`: optional. Tool name. If omitted, the CLI generates a name like
   `agentkit-codeenv-<random>`.
 - `--tos-bucket`: optional. TOS bucket mounted at `/home/gem`. If omitted, the
-  CLI uses `TOSService.generate_bucket_name()`, which resolves the configured
-  default bucket template.
+  tool is created without TOS mount configuration.
+- `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
+  `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
 - `--model-name`: optional. Injected into the tool as `OPENCODE_MODEL`,
   `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
 - `--model-api-key`: optional. Injected into the tool as `OPENCODE_API_KEY`,
   `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If omitted, the CLI uses
   `MODEL_API_KEY` when that environment variable is set.
+
+The sandbox create request maps `--cpu` to `CpuMilli=<cpu * 1000>` and
+`MemoryMb=<cpu * 2048>`, so the default shape is 4 vCPU / 8 GiB.
 
 The tool always injects Volcengine Ark compatible endpoints into
 `OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
@@ -73,7 +78,7 @@ TOS credentials. The command supports the same credential sources as the shared
 Volcengine configuration, including environment variables and global
 `agentkit config --global` settings.
 
-The generated tool TOS mount uses:
+When `--tos-bucket` is set, the generated tool TOS mount uses:
 
 ```text
 BucketPath: /sandbox-session/default/default
@@ -81,13 +86,16 @@ LocalMountPath: /home/gem
 Endpoint: http://tos-<region>.ivolces.com
 ```
 
-When `sandbox exec` or `sandbox shell` later creates a session from this tool,
-the session flow calls `GetTool`, reads this mount configuration, and mounts a
-per-session path:
+When `sandbox exec` or `sandbox shell` later creates a session from a tool with
+TOS configuration, the session flow calls `GetTool`, reads this mount
+configuration, and mounts a per-session path:
 
 ```text
 /sandbox-session/tool-<tool-id>/session-<session-id>/
 ```
+
+If the tool was created without `--tos-bucket`, `GetTool` has no TOS mount
+configuration and session creation skips TOS mounting.
 
 After the tool reaches `Ready`, `agentkit sandbox create` writes the tool
 information to `.agentkit/sandbox/tools.json`. Only one tool record is stored
@@ -106,7 +114,7 @@ agentkit sandbox get
 
 Options:
 
-- `--session-id` / `--sid`: optional. Sandbox session ID to look up. If omitted, the CLI
+- `--session-id` / `--sid` / `-s`: optional. Sandbox session ID to look up. If omitted, the CLI
   returns all records from `.agentkit/sandbox/sessions.json` after syncing the
   current tool.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -142,7 +150,7 @@ only operate on existing sessions; they do not create a session when
 
 Common options:
 
-- `--session-id` / `--sid`: required. Sandbox session ID to operate on.
+- `--session-id` / `--sid` / `-s`: required. Sandbox session ID to operate on.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
   set, the CLI resolves an existing tool by `--tool-type`.
 - `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
@@ -270,7 +278,7 @@ agentkit sandbox shell \
 
 Options:
 
-- `--session-id` / `--sid`: optional. Sandbox session ID used as the local session key.
+- `--session-id` / `--sid` / `-s`: optional. Sandbox session ID used as the local session key.
   If omitted, a UUID is generated and the command creates a sandbox session
   through the same idempotent session ensure flow as `sandbox exec`.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is
@@ -317,7 +325,7 @@ agentkit sandbox web --session-id 123456789 --tool-id t-example
 
 Options:
 
-- `--session-id` / `--sid`: required. Sandbox session ID to open in a browser.
+- `--session-id` / `--sid` / `-s`: required. Sandbox session ID to open in a browser.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. The
   underscore alias `--tool_id` is also accepted.
 
@@ -351,7 +359,7 @@ agentkit sandbox exec --session-id 123456789 --src-dir ./README.md ./requirement
 
 Options:
 
-- `--session-id` / `--sid`: optional. Sandbox session ID used as the local
+- `--session-id` / `--sid` / `-s`: optional. Sandbox session ID used as the local
   session key. If omitted, a UUID is generated and the command creates a
   sandbox session through the same idempotent session ensure flow.
 - `--tool-id`: optional. Defaults to `AGENTKIT_SANDBOX_TOOL_ID`. If neither is

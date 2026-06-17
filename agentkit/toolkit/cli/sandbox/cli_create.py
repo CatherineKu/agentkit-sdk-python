@@ -16,7 +16,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import time
@@ -26,10 +25,21 @@ import typer
 
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
-from agentkit.toolkit.cli.sandbox.session_create import (
+from agentkit.toolkit.cli.sandbox.model_config import (
+    ANTHROPIC_BASE_URL_ENV_KEYS,
+    CODE_ENV_CODEX_HOME,
+    CODE_ENV_HOME,
+    CODEX_CONFIG_TOML_ENV,
+    CODEX_MODEL_CATALOG_JSON_ENV,
+    DEFAULT_ANTHROPIC_BASE_URL,
+    DEFAULT_MODEL_BASE_URL,
+    DEFAULT_MODEL_NAME,
     MODEL_API_KEY_ENV,
     MODEL_API_KEY_ENV_KEYS,
+    MODEL_BASE_URL_ENV_KEYS,
     MODEL_NAME_ENV_KEYS,
+    build_codex_config_toml as _shared_build_codex_config_toml,
+    build_codex_model_catalog_json as _shared_build_codex_model_catalog_json,
 )
 from agentkit.toolkit.cli.sandbox.tool_resolve import save_tool_result
 from agentkit.toolkit.cli.sandbox.utils import error
@@ -44,29 +54,11 @@ DEFAULT_CREATE_TOOL_REGION = "cn-beijing"
 SANDBOX_REGION_ENV = "AGENTKIT_SANDBOX_REGION"
 SANDBOX_TOS_REGION_ENV = "AGENTKIT_SANDBOX_TOS_REGION"
 DEFAULT_CREATE_TOOL_TYPE = "CodeEnv"
+DEFAULT_CPU = 4
+VALID_CPU_VALUES = (2, 4, 8, 16)
+MEMORY_MB_PER_CPU = 2048
 DEFAULT_TOS_BUCKET_PATH = "/sandbox-session/default/default"
 DEFAULT_TOS_LOCAL_PATH = "/home/gem"
-CODE_ENV_HOME = "/home/gem"
-CODE_ENV_CODEX_HOME = "/home/gem/.codex"
-CODEX_MODEL_CATALOG_PATH = f"{CODE_ENV_CODEX_HOME}/model-catalog.json"
-DEFAULT_MODEL_NAME = "deepseek-v4-flash-260425"
-DEFAULT_MODEL_NAME_LIST = (
-    DEFAULT_MODEL_NAME,
-    "deepseek-v4-pro-260425",
-    "doubao-seed-2-0-pro-260215",
-)
-DEFAULT_MODEL_CONTEXT_WINDOW = 1000000
-MODEL_CONTEXT_WINDOW_OVERRIDES = {
-    "doubao-seed-2-0-pro-260215": 256000,
-}
-DEFAULT_MODEL_BASE_URL = "https://ark.cn-beijing.volces.com/api/v3"
-DEFAULT_ANTHROPIC_BASE_URL = "https://ark.cn-beijing.volces.com/api/compatible"
-MODEL_BASE_URL_ENV_KEYS = (
-    "OPENCODE_BASE_URL",
-    "CODEX_BASE_URL",
-    "MODEL_BASE_URL",
-)
-ANTHROPIC_BASE_URL_ENV_KEYS = ("ANTHROPIC_BASE_URL",)
 DISABLED_SERVICE_ENV_KEYS = (
     "DISABLE_JUPYTER",
     "DISABLE_CODE_SERVER",
@@ -94,9 +86,21 @@ def _generate_tool_name(tool_type: str) -> str:
 
 def _resolve_tos_bucket(tos_bucket: Optional[str]) -> str:
     resolved_bucket = (tos_bucket or "").strip()
-    if resolved_bucket:
-        return resolved_bucket
-    return TOSService.generate_bucket_name()
+    if not resolved_bucket:
+        error("--tos-bucket must not be empty")
+    return resolved_bucket
+
+
+def _validate_cpu(value: int) -> int:
+    if value not in VALID_CPU_VALUES:
+        allowed = ", ".join(str(item) for item in VALID_CPU_VALUES)
+        raise typer.BadParameter(f"--cpu must be one of: {allowed}")
+    return value
+
+
+def _cpu_to_resource_shape(cpu: int) -> tuple[int, int]:
+    resolved_cpu = _validate_cpu(cpu)
+    return resolved_cpu * 1000, resolved_cpu * MEMORY_MB_PER_CPU
 
 
 def _append_tool_envs(
@@ -114,94 +118,12 @@ def _append_tool_envs(
     )
 
 
-def _toml_quote(value: str) -> str:
-    return json.dumps(value, ensure_ascii=False)
-
-
 def _build_codex_config_toml(model_name: str) -> str:
-    quoted_model = _toml_quote(model_name)
-    return "\n".join(
-        [
-            'model_provider = "codex"',
-            f"model = {quoted_model}",
-            f"review_model = {quoted_model}",
-            'approval_policy = "never"',
-            'sandbox_mode = "danger-full-access"',
-            'model_reasoning_effort = "medium"',
-            'personality = "pragmatic"',
-            "check_for_update_on_startup = false",
-            'web_search = "disabled"',
-            f"model_catalog_json = {_toml_quote(CODEX_MODEL_CATALOG_PATH)}",
-            "",
-            "[model_providers.codex]",
-            'name = "codex"',
-            f"base_url = {_toml_quote(DEFAULT_MODEL_BASE_URL)}",
-            'wire_api = "responses"',
-            'env_key = "CODEX_API_KEY"',
-            "",
-            "[tui]",
-            "show_tooltips = false",
-            "",
-            '[projects."/home/gem"]',
-            'trust_level = "trusted"',
-            "",
-        ]
-    )
-
-
-def _build_model_catalog_item(model_name: str, max_context_window: int) -> dict:
-    return {
-        "slug": model_name,
-        "display_name": model_name,
-        "supported_reasoning_levels": [
-            {
-                "effort": "low",
-                "description": "Fast responses with lighter reasoning",
-            },
-            {
-                "effort": "medium",
-                "description": "Balances speed and reasoning depth",
-            },
-            {
-                "effort": "high",
-                "description": "Greater reasoning depth",
-            },
-        ],
-        "max_context_window": max_context_window,
-        "shell_type": "shell_command",
-        "visibility": "list",
-        "supported_in_api": True,
-        "priority": 100,
-        "base_instructions": "",
-        "supports_reasoning_summaries": True,
-        "support_verbosity": False,
-        "truncation_policy": {"mode": "tokens", "limit": 10000},
-        "supports_parallel_tool_calls": False,
-        "experimental_supported_tools": [],
-    }
-
-
-def _model_catalog_context_window(model_name: str) -> int:
-    return MODEL_CONTEXT_WINDOW_OVERRIDES.get(
-        model_name,
-        DEFAULT_MODEL_CONTEXT_WINDOW,
-    )
+    return _shared_build_codex_config_toml(model_name)
 
 
 def _build_codex_model_catalog_json(model_name: str) -> str:
-    deduped_model_names = list(
-        dict.fromkeys((model_name, *DEFAULT_MODEL_NAME_LIST))
-    )
-    payload = {
-        "models": [
-            _build_model_catalog_item(
-                name,
-                _model_catalog_context_window(name),
-            )
-            for name in deduped_model_names
-        ]
-    }
-    return json.dumps(payload, ensure_ascii=False, indent=2)
+    return _shared_build_codex_model_catalog_json(model_name)
 
 
 def _append_code_env_tool_envs(
@@ -223,11 +145,11 @@ def _append_code_env_tool_envs(
                 Value=CODE_ENV_CODEX_HOME,
             ),
             tools_types.EnvsItemForCreateTool(
-                Key="CODEX_CONFIG_TOML",
+                Key=CODEX_CONFIG_TOML_ENV,
                 Value=_build_codex_config_toml(model_name),
             ),
             tools_types.EnvsItemForCreateTool(
-                Key="CODEX_MODEL_CATALOG_JSON",
+                Key=CODEX_MODEL_CATALOG_JSON_ENV,
                 Value=_build_codex_model_catalog_json(model_name),
             ),
         ]
@@ -267,16 +189,20 @@ def _build_create_tool_request(
     name: Optional[str],
     tos_bucket: Optional[str],
     tos_region: str,
+    cpu: int = DEFAULT_CPU,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
 ) -> tools_types.CreateToolRequest:
     resolved_tool_type = tool_type.strip() or DEFAULT_CREATE_TOOL_TYPE
     resolved_name = (name or "").strip() or _generate_tool_name(resolved_tool_type)
     tos_mount_config = _build_tos_mount_config(tos_bucket, tos_region)
+    cpu_milli, memory_mb = _cpu_to_resource_shape(cpu)
 
     return tools_types.CreateToolRequest(
         Name=resolved_name,
         ToolType=resolved_tool_type,
+        CpuMilli=cpu_milli,
+        MemoryMb=memory_mb,
         AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
             KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
                 ApiKeyName=generate_apikey_name(),
@@ -299,7 +225,10 @@ def _build_create_tool_request(
 def _build_tos_mount_config(
     tos_bucket: Optional[str],
     region: str,
-) -> tools_types.TosMountForCreateTool:
+) -> tools_types.TosMountForCreateTool | None:
+    if not (tos_bucket or "").strip():
+        return None
+
     resolved_bucket = _resolve_tos_bucket(tos_bucket)
     service = TOSService(
         TOSServiceConfig(
@@ -397,6 +326,7 @@ def create_tool(
     tool_type: str = DEFAULT_CREATE_TOOL_TYPE,
     tool_name: Optional[str] = None,
     tos_bucket: Optional[str] = None,
+    cpu: int = DEFAULT_CPU,
     model_name: Optional[str] = None,
     model_api_key: Optional[str] = None,
 ) -> dict[str, object]:
@@ -407,6 +337,7 @@ def create_tool(
         name=tool_name,
         tos_bucket=tos_bucket,
         tos_region=tos_region,
+        cpu=cpu,
         model_name=model_name,
         model_api_key=model_api_key,
     )
@@ -440,7 +371,16 @@ def create_command(
     tos_bucket: Optional[str] = typer.Option(
         None,
         "--tos-bucket",
-        help="TOS bucket to mount at /home/gem.",
+        help=(
+            "TOS bucket to mount at /home/gem. "
+            "Omit to create the tool without a TOS mount."
+        ),
+    ),
+    cpu: int = typer.Option(
+        DEFAULT_CPU,
+        "--cpu",
+        help="Sandbox vCPU count. Allowed values: 2, 4, 8, 16.",
+        callback=_validate_cpu,
     ),
     model_name: Optional[str] = typer.Option(
         None,
@@ -465,6 +405,7 @@ def create_command(
             tool_type=tool_type,
             tool_name=tool_name,
             tos_bucket=tos_bucket,
+            cpu=cpu,
             model_name=model_name,
             model_api_key=model_api_key,
         )
