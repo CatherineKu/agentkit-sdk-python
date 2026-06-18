@@ -2524,6 +2524,153 @@ def test_cli_exec_runs_command_option(monkeypatch, tmp_path) -> None:
     assert captured["initial_command"] == "codex"
 
 
+def test_cli_sandbox_run_reads_yaml_and_prints_dry_run(tmp_path) -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    config_path = tmp_path / "sandbox-run.yaml"
+    config_path.write_text(
+        """
+exec:
+  - name: left
+    cwd: .
+    session_id: user-left
+    tool_id: tool-1
+    command: codex
+    src_dir: ./workspace
+    extra_sources:
+      - ./README.md
+    dst_dir: project
+  - name: right
+    args:
+      - --session-id
+      - user-right
+      - --command
+      - opencode
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "run",
+            "--config",
+            str(config_path),
+            "--terminal",
+            "2",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert "agentkit sandbox exec" in result.output
+    assert "--session-id user-left" in result.output
+    assert "--tool-id tool-1" in result.output
+    assert "--command codex" in result.output
+    assert "--src-dir ./workspace ./README.md" in result.output
+    assert "--dst-dir project" in result.output
+    assert "--session-id user-right --command opencode" in result.output
+
+
+def test_cli_sandbox_run_errors_when_terminal_exceeds_yaml_entries(
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    config_path = tmp_path / "sandbox-run.yaml"
+    config_path.write_text(
+        """
+tabs:
+  - session_id: user-left
+""",
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "run",
+            "--config",
+            str(config_path),
+            "--terminal",
+            "4",
+            "--dry-run",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "contains 1 exec entries" in result.output
+    assert "--terminal requested 4" in result.output
+
+
+def test_cli_sandbox_run_opens_terminal_tmux_grid_without_system_events(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_run as cli_run
+
+    config_path = tmp_path / "sandbox-run.yaml"
+    config_path.write_text(
+        """
+exec:
+  - session_id: user-left
+  - session_id: user-right
+""",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    def fake_run(args, check):
+        captured["args"] = args
+        captured["check"] = check
+
+    def fake_mkdtemp(prefix):
+        scripts_dir.mkdir()
+        return str(scripts_dir)
+
+    scripts_dir = tmp_path / "tmux-scripts"
+    monkeypatch.setattr(cli_run.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cli_run.shutil, "which", lambda _name: "/opt/homebrew/bin/tmux")
+    monkeypatch.setattr(cli_run.tempfile, "mkdtemp", fake_mkdtemp)
+    monkeypatch.setattr(cli_run.subprocess, "run", fake_run)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "run",
+            "--config",
+            str(config_path),
+            "--terminal",
+            "2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["check"] is True
+    script = captured["args"][2]
+    assert captured["args"][:2] == ["osascript", "-e"]
+    assert "System Events" not in script
+    assert "make new tab" not in script
+    assert script.count("do script") == 1
+    assert f"/bin/zsh {scripts_dir / 'run.zsh'}" in script
+
+    launcher = (scripts_dir / "run.zsh").read_text(encoding="utf-8")
+    assert 'TMUX_BIN=/opt/homebrew/bin/tmux' in launcher
+    assert "new-session -d -s" in launcher
+    assert launcher.count("split-window") == 1
+    assert "select-layout" in launcher
+    assert "attach-session" in launcher
+
+    pane_1 = (scripts_dir / "pane-1.zsh").read_text(encoding="utf-8")
+    pane_2 = (scripts_dir / "pane-2.zsh").read_text(encoding="utf-8")
+    assert "agentkit sandbox exec --session-id user-left" in pane_1
+    assert "agentkit sandbox exec --session-id user-right" in pane_2
+
+
 def test_cli_exec_git_config_file_does_not_reuse_shell_exec_id_for_ws(
     monkeypatch,
     tmp_path,

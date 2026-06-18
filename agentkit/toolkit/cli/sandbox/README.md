@@ -436,6 +436,48 @@ Press `Ctrl-]`, or type `exit` / `exit()`, to detach from the local terminal.
 `Ctrl-C` is forwarded to the remote process, which is useful for interrupting
 Codex or shell commands without closing the local WebSocket client.
 
+### Run
+
+Open a local macOS Terminal tab with a tiled `tmux` layout and run different
+`sandbox exec` commands from a YAML file. For `--terminal 4`, the four exec
+sessions are arranged as a 2x2 grid. The CLI writes short temporary launcher
+scripts and asks Terminal to run the launcher, so long prompts and quoted
+commands are not embedded directly in AppleScript.
+
+```bash
+agentkit sandbox run --terminal 4
+agentkit sandbox run --config sandbox-run.yaml --terminal 4 --dry-run
+```
+
+By default, the command reads `agentkit-sandbox-run.yaml`. The YAML can be a
+top-level list or contain `exec`, `execs`, `tabs`, or `commands`:
+
+```yaml
+exec:
+  - name: agent-a
+    session_id: agent-a
+    tool_id: t-example
+    command: codex
+    src_dir: ./workspace
+    extra_sources:
+      - ./README.md
+    dst_dir: project
+  - name: agent-b
+    args:
+      - --session-id
+      - agent-b
+      - --command
+      - opencode
+```
+
+Mapping entries support the same option names as `sandbox exec`, written with
+underscores, such as `session_id`, `tool_id`, `tool_type`, `command`,
+`shell_id`, `workspace`, `dst_dir`, `git_config`, `model_name`,
+`model_api_key`, and `model_provider`. Use `src_dir` or `src_dirs` for the
+first uploaded source and optional additional source paths; use `extra_sources`
+for additional positional sources. Use `args` when you want to provide raw
+`sandbox exec` arguments directly.
+
 ## Local Store
 
 `agentkit sandbox exec` writes session results to:
@@ -504,7 +546,7 @@ Example:
 
 ## Module Layout
 
-- `cli.py`: registers the `create`, `get`, `exec`, `shell`, and `file` sandbox subcommands.
+- `cli.py`: registers the sandbox subcommands.
 - `../cli.py`: registers the `sandbox` command group.
 - `session_create.py`: shared session creation and idempotent ensure helpers.
 - `session_sync.py`: shared remote session list/sync helpers.
@@ -513,5 +555,6 @@ Example:
 - `cli_get.py`: get command implementation.
 - `cli_shell.py`: shell command implementation.
 - `cli_exec.py`: streaming exec command implementation.
+- `cli_run.py`: multi-tab exec runner implementation.
 - `cli_file.py`: file upload, download, and list command implementation.
 - `utils.py`: shared store, URL, JSON, and error helpers.
