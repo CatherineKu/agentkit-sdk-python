@@ -59,8 +59,13 @@ Options:
   tool is created without TOS mount configuration.
 - `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
   `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
+- `--model-provider`: optional. Model provider to use for base URLs, the
+  default model, and the Codex model catalog. Supported values are
+  `model_square`, `coding_plan`, and `agent_plan`; defaults to `model_square`.
 - `--model-name`: optional. Injected into the tool as `OPENCODE_MODEL`,
-  `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
+  `CODEX_MODEL`, and `ANTHROPIC_MODEL`. If omitted, the provider's default
+  model is used. Custom model names are allowed and are added to the Codex
+  model catalog with default capabilities.
 - `--model-api-key`: optional. Injected into the tool as `OPENCODE_API_KEY`,
   `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If omitted, the CLI uses
   `MODEL_API_KEY` when that environment variable is set.
@@ -68,9 +73,27 @@ Options:
 The sandbox create request maps `--cpu` to `CpuMilli=<cpu * 1000>` and
 `MemoryMb=<cpu * 2048>`, so the default shape is 4 vCPU / 8 GiB.
 
-The tool always injects Volcengine Ark compatible endpoints into
-`OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
-`ANTHROPIC_BASE_URL`. Custom `--model-base-url` is intentionally not exposed.
+The tool injects the selected provider's Volcengine Ark compatible endpoints
+into `OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
+`ANTHROPIC_BASE_URL`, and stores the selected provider in
+`AGENTKIT_SANDBOX_MODEL_PROVIDER`. The same provider ID and base URL are written
+into `CODEX_CONFIG_TOML`, and provider-supported models are written into
+`CODEX_MODEL_CATALOG_JSON`. The create request also injects
+`BROWSER_EXTRA_ARGS` for browser startup inside the sandbox:
+
+```sh
+--enable-unsafe-swiftshader --use-gl=angle --use-angle=swiftshader-webgl --ignore-gpu-blocklist
+```
+
+Custom `--model-base-url` is intentionally not exposed.
+
+Provider defaults:
+
+| Provider | Default model | Model base URL |
+| --- | --- | --- |
+| `model_square` | `deepseek-v4-flash-260425` | `https://ark.cn-beijing.volces.com/api/v3` |
+| `coding_plan` | `deepseek-v4-flash` | `https://ark.cn-beijing.volces.com/api/coding/v3` |
+| `agent_plan` | `deepseek-v4-flash` | `https://ark.cn-beijing.volces.com/api/plan/v3` |
 
 Credential resolution is delegated to the underlying SDK/service clients:
 `AgentkitToolsClient` handles `CreateTool` credentials, and `TOSService` handles
@@ -266,8 +289,7 @@ Execute a command in a sandbox shell.
 ```bash
 agentkit sandbox shell \
   --session-id 123456789 \
-  --command 'echo $TEST_VAR' \
-  --shell-id shell-example
+  --command 'echo $TEST_VAR'
 
 agentkit sandbox shell \
   --session-id 123456789 \
@@ -288,7 +310,6 @@ Options:
   `AGENTKIT_SANDBOX_TOOL_ID` are both absent.
 - `--command`: required. Command to execute in the sandbox.
 - `--exec-dir`: optional execution directory.
-- `--shell-id`: optional shell terminal ID for re-entering an existing shell.
 - `--workspace`: optional sandbox workspace root; defaults to `/home/gem`.
 - `--src-dir`: optional local file or directory to upload before executing the
   shell command. Additional file or directory paths can follow this option,
@@ -301,7 +322,7 @@ The command posts to `<endpoint>/v1/shell/exec` with:
 
 ```json
 {
-  "id": "shell-example",
+  "id": "",
   "exec_dir": "",
   "command": "echo $TEST_VAR"
 }
@@ -370,8 +391,6 @@ Options:
 - `--command`: optional. Initial command to run after the exec session is ready.
   Omit this option to connect without running an initial command. Use
   `--command codex` to start the remote Codex TUI.
-- `--shell-id`: optional. Existing shell terminal ID to connect to. When this is
-  set and `--command` is omitted, no initial command is sent.
 - `--workspace`: optional sandbox workspace root; defaults to `/home/gem`.
 - `--src-dir`: optional local file or directory to upload before opening the
   exec session. Additional file or directory paths can follow this option,
@@ -380,7 +399,13 @@ Options:
   a relative path appended under `--workspace`; when omitted, sources are
   uploaded into `--workspace`.
 - `--model-name`: optional. When creating a sandbox session, injects the value
-  as `OPENCODE_MODEL`, `CODEX_MODEL`, and `ANTHROPIC_MODEL`.
+  as `OPENCODE_MODEL`, `CODEX_MODEL`, and `ANTHROPIC_MODEL`. Custom model names
+  are allowed.
+- `--model-provider`: optional. When creating a sandbox session, uses the
+  provider's default model if `--model-name` is omitted, injects provider base
+  URL envs, and updates `CODEX_CONFIG_TOML` / `CODEX_MODEL_CATALOG_JSON` for
+  `CodeEnv` sessions. Supported values are `model_square`, `coding_plan`, and
+  `agent_plan`.
 - `--model-api-key`: optional. When creating a sandbox session, injects the
   value as `OPENCODE_API_KEY`, `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If
   omitted, the CLI uses `MODEL_API_KEY` when that environment variable is set.
@@ -400,6 +425,12 @@ stores it in the `terminal_shell_id` list in `.agentkit/sandbox/sessions.json`
 while the connection is active. Multiple live WebSocket connections under the
 same sandbox `session_id` are tracked in the same list. The CLI removes only the
 current shell ID from the list when that connection is detached or closed.
+
+When `--model-name` is provided without `--model-provider`, `exec` still updates
+`CODEX_CONFIG_TOML` / `CODEX_MODEL_CATALOG_JSON` for `CodeEnv` sessions. It
+first tries to reuse `AGENTKIT_SANDBOX_MODEL_PROVIDER` from the cached or remote
+tool configuration, then falls back to `model_square` when no marker is
+available.
 
 Press `Ctrl-]`, or type `exit` / `exit()`, to detach from the local terminal.
 `Ctrl-C` is forwarded to the remote process, which is useful for interrupting

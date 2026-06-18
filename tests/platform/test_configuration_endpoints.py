@@ -111,6 +111,18 @@ class TestConfigurationEndpoints:
         # cr.{region}.volcengineapi.com -> cr.us-east-1.volcengineapi.com
         assert cr_ep.host == "cr.us-east-1.volcengineapi.com"
 
+    def test_explicit_region_overrides_service_specific_region(
+        self, clean_env, mock_global_config
+    ):
+        """Explicit region must win over service-specific env/config overrides."""
+        os.environ["VOLCENGINE_AGENTKIT_REGION"] = "cn-guangzhou"
+        mock_global_config.update({"services": {"agentkit": {"region": "cn-hangzhou"}}})
+
+        config = VolcConfiguration(region="cn-shanghai")
+        ep = config.get_service_endpoint("agentkit")
+
+        assert ep.region == "cn-shanghai"
+
     def test_endpoint_unknown_service(self, clean_env, mock_global_config):
         """Test that unknown service raises ValueError."""
         config = VolcConfiguration()
