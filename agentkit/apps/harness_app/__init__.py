@@ -1,2 +1,0 @@
-"""AgentKit harness runtime app."""
-

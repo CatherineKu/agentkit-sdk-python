@@ -43,7 +43,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 from urllib.parse import parse_qs, urlparse
 
 import typer
@@ -80,6 +80,15 @@ _REGISTRY_QUERY_KEYS = {
 _REGISTRY_INT_KEYS = {"top_k", "timeout_ms", "poll_interval_ms"}
 _REGISTER_NETWORK_TYPES = {"public", "private"}
 _REGISTER_DEFAULT_VERSION = "2025-10-30"
+
+
+class _A2ARegisterError(Exception):
+    def __init__(
+        self, message: str, diagnostics: dict[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.message = message
+        self.diagnostics = diagnostics or {}
 
 
 def _split_csv(value: Optional[str]) -> Optional[list[str]]:
@@ -303,6 +312,131 @@ def _default_agentkit_endpoint(region: str) -> str:
     return f"https://agentkit.{region}.volcengineapi.com/"
 
 
+def _request_id(response: dict[str, Any]) -> str | None:
+    return (response.get("ResponseMetadata") or {}).get("RequestId")
+
+
+def _resolve_agentkit_credentials():
+    from agentkit.platform import VolcConfiguration, resolve_credentials
+
+    return resolve_credentials("agentkit", platform_config=VolcConfiguration())
+
+
+def _agentkit_post(
+    *,
+    endpoint: str,
+    version: str,
+    region: str,
+    action: str,
+    body: dict[str, Any],
+) -> tuple[dict[str, Any], int]:
+    import time
+
+    import requests
+
+    from agentkit.auth._sigv4 import sign_headers
+
+    credentials = _resolve_agentkit_credentials()
+    started = time.monotonic()
+    body_bytes = json.dumps(body, ensure_ascii=False).encode("utf-8")
+    parsed = urlparse(endpoint)
+    path = parsed.path or "/"
+    query = {"Action": action, "Version": version}
+    headers = sign_headers(
+        "POST",
+        parsed.netloc,
+        query,
+        body_bytes,
+        access_key=credentials.access_key,
+        secret_key=credentials.secret_key,
+        service="agentkit",
+        region=region,
+        session_token=credentials.session_token or None,
+        path=path,
+    )
+
+    response = None
+    try:
+        response = requests.post(
+            endpoint,
+            params=query,
+            headers=headers,
+            data=body_bytes,
+            timeout=60,
+        )
+        response.raise_for_status()
+        data = response.json()
+    except requests.RequestException as exc:
+        diagnostics = {}
+        if response is not None:
+            diagnostics["status_code"] = response.status_code
+            try:
+                diagnostics["response"] = response.json()
+            except ValueError:
+                pass
+        raise _A2ARegisterError(
+            f"AgentKit OpenAPI request failed: {exc}", diagnostics
+        ) from exc
+    except ValueError as exc:
+        raise _A2ARegisterError(
+            "AgentKit OpenAPI returned non-JSON response"
+        ) from exc
+
+    duration_ms = int((time.monotonic() - started) * 1000)
+    if data.get("Error"):
+        raise _A2ARegisterError(
+            "AgentKit OpenAPI returned an error", {"response": data.get("Error")}
+        )
+    if "Result" not in data:
+        raise _A2ARegisterError("AgentKit OpenAPI response missing Result")
+    return data, duration_ms
+
+
+def _create_a2a_agent(
+    *,
+    a2a_space_id: str,
+    runtime_id: str,
+    network_type: str,
+    project_name: Optional[str],
+    tags: list[dict[str, str]] | None,
+    set_default_version: bool,
+    endpoint: str,
+    version: str,
+    region: str,
+) -> dict[str, Any]:
+    body: dict[str, Any] = {
+        "Source": "Runtime",
+        "A2aSpaceId": a2a_space_id,
+        "RuntimeConfig": {
+            "RuntimeId": runtime_id,
+            "NetworkType": network_type,
+        },
+        "SetDefaultVersion": bool(set_default_version),
+    }
+    if project_name:
+        body["ProjectName"] = project_name
+    if tags:
+        body["Tags"] = tags
+
+    response, request_duration_ms = _agentkit_post(
+        endpoint=endpoint,
+        version=version,
+        region=region,
+        action="CreateA2aAgent",
+        body=body,
+    )
+    result = response.get("Result") or {}
+    return {
+        "outcome": "success",
+        "agent_id": result.get("Id", ""),
+        "tags": result.get("Tags") or [],
+        "diagnostics": {
+            "request_id": _request_id(response),
+            "request_duration_ms": request_duration_ms,
+        },
+    }
+
+
 def _resolve_register_runtime_id(
     directory: str, name: str, runtime_id: Optional[str]
 ) -> str:
@@ -369,32 +503,23 @@ def _register_a2a_runtime_agent(
     resolved_space_id = _resolve_register_space_id(data, space_id)
     parsed_tags = _parse_register_tags(tags)
 
-    from agentkit.a2a.registry_client import (
-        AgentKitA2ARegistryConfig,
-        RegistryError,
-        register_runtime_agent,
-    )
-
     console.print(
         f"[cyan]Registering harness '{name}' runtime {resolved_runtime_id} "
         f"to A2A space {resolved_space_id}...[/cyan]"
     )
     try:
-        result = register_runtime_agent(
+        result = _create_a2a_agent(
             a2a_space_id=resolved_space_id,
             runtime_id=resolved_runtime_id,
             network_type=normalized_network_type,
             project_name=project_name,
             tags=parsed_tags or None,
             set_default_version=set_default_version,
-            config=AgentKitA2ARegistryConfig(
-                space_id=resolved_space_id,
-                endpoint=resolved_endpoint,
-                version=version,
-                region=resolved_region,
-            ),
+            endpoint=resolved_endpoint,
+            version=version,
+            region=resolved_region,
         )
-    except RegistryError as exc:
+    except _A2ARegisterError as exc:
         console.print(f"[red]❌ A2A registration failed: {exc.message}[/red]")
         if exc.diagnostics:
             console.print(json.dumps(exc.diagnostics, ensure_ascii=False, indent=2))

@@ -243,7 +243,7 @@ def test_add_harness_register_a2a_resolves_runtime_and_space(
     )
     captured = {}
 
-    def fake_register_runtime_agent(**kwargs):
+    def fake_create_a2a_agent(**kwargs):
         captured.update(kwargs)
         return {
             "outcome": "success",
@@ -253,8 +253,8 @@ def test_add_harness_register_a2a_resolves_runtime_and_space(
         }
 
     monkeypatch.setattr(
-        "agentkit.a2a.registry_client.register_runtime_agent",
-        fake_register_runtime_agent,
+        "agentkit.toolkit.cli.cli_add._create_a2a_agent",
+        fake_create_a2a_agent,
     )
 
     result = _run(
@@ -283,9 +283,9 @@ def test_add_harness_register_a2a_resolves_runtime_and_space(
     assert captured["network_type"] == "public"
     assert captured["project_name"] == "default"
     assert captured["tags"] == [{"Key": "env", "Value": "test"}]
-    config = captured["config"]
-    assert config.endpoint == "https://agentkit.cn-beijing.volcengineapi.com/"
-    assert config.space_id == "space-test"
+    assert captured["endpoint"] == "https://agentkit.cn-beijing.volcengineapi.com/"
+    assert captured["version"] == "2025-10-30"
+    assert captured["region"] == "cn-beijing"
 
 
 def test_add_harness_register_a2a_requires_runtime_id(tmp_path):
