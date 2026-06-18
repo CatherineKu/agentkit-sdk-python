@@ -154,6 +154,8 @@ def test_harness_invoke_posts_correct_request(tmp_path, monkeypatch):
     assert body["prompt"] == "What should you reply?"
     assert body["harness_name"] == "first"
     assert body["run_agent_request"]["user_id"] == "agentkit_user"
+    # No --session-id → random s-<id>, consistent with the run_sse path.
+    assert body["run_agent_request"]["session_id"].startswith("s-")
     assert body["run_agent_request"]["max_llm_calls"] == 7
     # Partial overrides only (model_fields_set semantics).
     assert body["harness"] == {"system_prompt": "Reply PINEAPPLE."}
@@ -581,6 +583,38 @@ def test_default_protocol_is_run_sse_with_random_session(tmp_path, monkeypatch):
     # The session is created (idempotently) before the run, under that id.
     sess_call = next(c for c in calls if "/sessions/" in c["url"])
     assert sess_call["url"].endswith(f"/sessions/{sid}")
+
+
+def test_run_sse_renders_thinking_then_answer(tmp_path, monkeypatch):
+    """Reasoning streams under a 思考中 header; the answer under 📝 Response."""
+    _write_registry(tmp_path, {"first": {"url": "https://x", "key": "ak"}})
+    sse = [
+        'data: {"content":{"parts":[{"text":"let me think","thought":true}]},"partial":true}',
+        'data: {"content":{"parts":[{"text":"FINAL"}]},"partial":true}',
+    ]
+
+    class _SSEResp:
+        status_code = 200
+        text = ""
+
+        def iter_lines(self, decode_unicode=False):
+            return iter(sse)
+
+    def fake_post(url, json=None, headers=None, timeout=None, stream=False):
+        return _SSEResp() if url.endswith("/run_sse") else _FakeResponse({}, 200)
+
+    monkeypatch.setattr("requests.post", fake_post)
+
+    result = _run_harness(
+        ["first", "hi", "--directory", str(tmp_path), "--session-id", "s-1"]
+    )
+    assert result.exit_code == 0, result.output
+    out = result.output
+    # Reasoning is shown (not dropped) and precedes the answer.
+    assert "思考中" in out
+    assert "let me think" in out
+    assert "FINAL" in out
+    assert out.index("let me think") < out.index("FINAL")
 
 
 def test_harness_invalid_protocol_fails(tmp_path):

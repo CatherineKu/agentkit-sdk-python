@@ -726,19 +726,23 @@ def _harness_run_sse(
         )
         raise typer.Exit(1)
 
-    console.print("[cyan]📝 Response:[/cyan]")
-
-    def _answer_text(event: dict) -> str:
-        # Answer text parts only; drop model "thought" (reasoning) parts.
+    def _split_parts(event: dict) -> tuple[str, str]:
+        # Separate the model's answer text from its "thought" (reasoning) text.
         parts = (event.get("content") or {}).get("parts") or []
-        return "".join(
-            p["text"]
-            for p in parts
-            if isinstance(p, dict) and p.get("text") and not p.get("thought")
-        )
+        answer = thought = ""
+        for p in parts:
+            if not (isinstance(p, dict) and p.get("text")):
+                continue
+            if p.get("thought"):
+                thought += p["text"]
+            else:
+                answer += p["text"]
+        return answer, thought
 
     streamed = []
     final_answer = ""
+    thinking_open = False  # streaming reasoning under the "🤔 思考中" header
+    answer_open = False  # the "📝 Response:" header has been printed
     for line in resp.iter_lines(decode_unicode=True):
         if not line:
             continue
@@ -751,17 +755,29 @@ def _harness_run_sse(
         if event.get("error"):
             console.print(f"\n[red]Error: {event['error']}[/red]")
             continue
-        answer = _answer_text(event)
+        answer, thought = _split_parts(event)
         # `partial=False` is the final aggregate (repeats everything) — keep it as
         # a fallback but don't print it; the partial events stream answer deltas.
         if event.get("partial") is False:
             final_answer = answer or final_answer
             continue
+        # Reasoning streams dim/grey under its own header, so the wait isn't blank.
+        if thought and not answer_open:
+            if not thinking_open:
+                console.print("[dim]🤔 思考中…[/dim]")
+                thinking_open = True
+            console.print(thought, end="", style="dim")
         if answer:
+            if not answer_open:
+                if thinking_open:
+                    console.print("")  # close the reasoning block
+                console.print("[cyan]📝 Response:[/cyan]")
+                answer_open = True
             console.print(answer, end="", style="green")
             streamed.append(answer)
 
     if not streamed and final_answer:
+        console.print("[cyan]📝 Response:[/cyan]")
         console.print(final_answer, end="", style="green")
     console.print("")
     return "".join(streamed) or final_answer
@@ -782,7 +798,7 @@ def harness_command(
     session_id: str = typer.Option(
         None,
         "--session-id",
-        help="session_id for the run (run_sse: random if unset).",
+        help="session_id for the run (random if unset).",
     ),
     max_llm_calls: int = typer.Option(
         None,
@@ -898,6 +914,10 @@ def harness_command(
     if not token:
         token = entry.get("key") or ""
 
+    # No session given → mint a random one (both transports behave identically;
+    # creating it is idempotent).
+    session_id = session_id or f"s-{uuid.uuid4().hex[:12]}"
+
     if protocol == "run_sse":
         # run_sse supports the same overrides (sent as the `harness` field); only
         # --max-llm-calls is invoke-only (not part of the ADK run_sse request).
@@ -910,15 +930,13 @@ def harness_command(
             base_url=base_url,
             token=token,
             prompt=message,
-            # No session given → mint a random one; creating it is idempotent.
-            session_id=session_id or f"s-{uuid.uuid4().hex[:12]}",
+            session_id=session_id,
             overrides=build_harness_overrides(
                 system_prompt, model_name, tools, skills, runtime
             ),
             raw=raw,
         )
 
-    session_id = session_id or "agentkit_sample_session"
     invoke_url = base_url + "/harness/invoke"
     req_headers = {"Content-Type": "application/json"}
     if token:
