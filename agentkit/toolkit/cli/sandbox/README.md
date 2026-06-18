@@ -55,8 +55,10 @@ Options:
 - `--tool-type`: optional. Tool type to create; defaults to `CodeEnv`.
 - `--tool-name`: optional. Tool name. If omitted, the CLI generates a name like
   `agentkit-codeenv-<random>`.
-- `--tos-bucket`: optional. TOS bucket mounted at `/home/gem`. If omitted, the
-  tool is created without TOS mount configuration.
+- `--tos-bucket`: optional. TOS bucket to mount. If omitted, the tool is
+  created without TOS mount configuration.
+- `--tos-mount`: optional. Local mount path for `--tos-bucket`; defaults to
+  `/home/gem`.
 - `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
   `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
 - `--model-provider`: optional. Model provider to use for base URLs, the
@@ -101,7 +103,8 @@ TOS credentials. The command supports the same credential sources as the shared
 Volcengine configuration, including environment variables and global
 `agentkit config --global` settings.
 
-When `--tos-bucket` is set, the generated tool TOS mount uses:
+When `--tos-bucket` is set, the generated tool TOS mount uses
+`LocalMountPath: /home/gem` by default, or the path provided by `--tos-mount`:
 
 ```text
 BucketPath: /sandbox-session/default/default
@@ -419,6 +422,10 @@ flow to archive the local file or directory, upload it to the session, and
 extract it into the directory resolved from `--workspace` and `--dst-dir`. The
 WebSocket exec connection is opened only after the upload and extraction
 complete.
+
+When the resolved tool has `TosMountConfig.MountPoints` in `GetTool`, session
+creation passes those mount points to `CreateSession` and uses each returned
+`LocalMountPath` as-is.
 
 When the remote terminal returns a shell session ID, the CLI prints it and
 stores it in the `terminal_shell_id` list in `.agentkit/sandbox/sessions.json`

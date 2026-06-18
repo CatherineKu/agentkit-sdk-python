@@ -769,7 +769,7 @@ def test_ensure_sandbox_session_mounts_tool_tos_by_tool_and_session(
                 _FakeToolMountPoint(
                     bucket_name="agentkit-platform-123",
                     bucket_path="/sandbox-session/default/default",
-                    local_mount_path="/home/gem",
+                    local_mount_path="/home/gem/Downloads",
                 )
             ]
         )
@@ -789,7 +789,7 @@ def test_ensure_sandbox_session_mounts_tool_tos_by_tool_and_session(
         mount_points[0].bucket_path
         == "/sandbox-session/tool-tool-cli/session-user-cli/"
     )
-    assert mount_points[0].local_mount_path == "/home/gem"
+    assert mount_points[0].local_mount_path == "/home/gem/Downloads"
 
 
 def test_ensure_sandbox_session_confirms_create_start_fail_by_user_session_id(
@@ -1046,6 +1046,15 @@ def test_sandbox_shell_id_option_is_disabled(args) -> None:
 
     assert result.exit_code == 0
     assert "--shell-id" not in result.output
+
+
+def test_sandbox_exec_tos_mount_option_is_disabled() -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    result = runner.invoke(app, ["sandbox", "exec", "--help"])
+
+    assert result.exit_code == 0
+    assert "--tos-mount" not in result.output
 
 
 def test_sandbox_commands_are_not_registered_at_top_level() -> None:
