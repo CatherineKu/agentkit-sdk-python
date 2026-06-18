@@ -362,10 +362,13 @@ def create_command(
             "Omit to create the tool without a TOS mount."
         ),
     ),
-    tos_mount: str = typer.Option(
-        DEFAULT_TOS_LOCAL_PATH,
+    tos_mount: Optional[str] = typer.Option(
+        None,
         "--tos-mount",
-        help="Local mount path for the TOS bucket.",
+        help=(
+            "Local mount path for the TOS bucket. Requires --tos-bucket. "
+            f"Defaults to {DEFAULT_TOS_LOCAL_PATH} when omitted."
+        ),
     ),
     cpu: int = typer.Option(
         DEFAULT_CPU,
@@ -397,11 +400,13 @@ def create_command(
 ) -> None:
     """Create an AgentKit Tool with optional TOS mount."""
     try:
+        if tos_mount is not None and not (tos_bucket or "").strip():
+            error("--tos-mount requires --tos-bucket")
         result = create_tool(
             tool_type=tool_type,
             tool_name=tool_name,
             tos_bucket=tos_bucket,
-            tos_mount_path=tos_mount,
+            tos_mount_path=tos_mount or DEFAULT_TOS_LOCAL_PATH,
             cpu=cpu,
             model_name=model_name,
             model_api_key=model_api_key,

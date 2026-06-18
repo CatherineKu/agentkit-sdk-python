@@ -346,6 +346,32 @@ def test_create_command_uses_tos_mount_option(monkeypatch):
     assert tos_config.mount_points[0].local_mount_path == "/mnt/workspace"
 
 
+def test_create_command_rejects_tos_mount_without_tos_bucket(monkeypatch):
+    from agentkit.toolkit.cli.cli import app
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "AgentkitToolsClient", _FakeToolsClient)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "create",
+            "--tool-name",
+            "demo-tool",
+            "--tos-mount",
+            "/home/gem/tmp",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "--tos-mount requires --tos-bucket" in result.output
+    assert _FakeToolsClient.instances == []
+    assert _FakeTOSService.instances == []
+
+
 def test_create_command_uses_cpu_option_for_resource_shape(monkeypatch):
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create
