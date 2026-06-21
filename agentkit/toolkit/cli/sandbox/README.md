@@ -369,6 +369,46 @@ with the system default browser, and the response is JSON:
 }
 ```
 
+### Mount
+
+Open a sandbox session's TOS path in TOS Browser.
+
+```bash
+agentkit sandbox mount \
+  --session-id 123456789 \
+  --oauth-url https://example.com/oauth \
+  --tos-bucket sandbox-bucket
+agentkit sandbox mount \
+  --tool-id t-example \
+  --session-id 123456789 \
+  --oauth-url https://example.com/oauth \
+  --tos-bucket sandbox-bucket
+```
+
+Options:
+
+- `--session-id` / `--sid` / `-s`: required. Sandbox session ID to mount.
+- `--oauth-url`: required. Base URL used to fetch
+  `/.well-known/agentkit-cli`.
+- `--tos-bucket`: required. TOS bucket name.
+- `--tool-id`: optional. If omitted, the CLI reads the local
+  `.agentkit/sandbox/tools.json` cache by `--tool-type`; it does not create a
+  tool or list remote tools.
+- `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
+
+The discovery document is saved to `.agentkit/sandbox/agentkit-cli`. The CLI
+extracts `role_trn`, `client_id`, and the user pool ID from `issuer`, then runs
+`open "<command>"`, where `command` is the generated `tosbrowser://...` URL.
+The response is JSON:
+
+```json
+{
+  "tool_id": "t-example",
+  "session_id": "123456789",
+  "command": "tosbrowser://open?path=tos://sandbox-bucket/sandbox-session/tool-t-example/session-123456789/&type=oAuthLogin&role=...&userPool=...&clientId=..."
+}
+```
+
 ### Exec
 
 Open a streaming WebSocket exec session to the sandbox. By default, this connects
