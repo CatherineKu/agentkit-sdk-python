@@ -248,12 +248,7 @@ class InvokeGroup(TyperGroup):
     def parse_args(self, ctx, args):
         if args:
             first = args[0]
-            if first in ("--harness", "-H"):
-                if len(args) >= 2:
-                    args = ["harness", args[1], *args[2:]]
-            elif first.startswith("--harness="):
-                args = ["harness", first.split("=", 1)[1], *args[1:]]
-            elif first != "--help" and first not in self.commands:
+            if first != "--help" and first not in self.commands:
                 args = [self.default_cmd_name] + args
         return super().parse_args(ctx, args)
 
@@ -998,13 +993,11 @@ def harness_command(
     Examples:
         # Invoke a deployed harness
         agentkit invoke harness my-harness "What is 2+2?"
-        agentkit invoke --harness my-harness "What is 2+2?"
 
         # Per-call overrides
         agentkit invoke harness my-harness --system-prompt "Be terse." "What is 2+2?"
         agentkit invoke harness my-harness --max-llm-calls 10 "Plan a trip."
         agentkit invoke harness my-harness --registry-space-id as-xxx "Find an agent."
-        agentkit invoke --harness my-harness --model-id doubao-seed-2-0-code-preview-260215 --registry "agentkit://a2a-registry?space_id=as-xxx" "Find an agent."
     """
     import requests
     from agentkit.toolkit.harness import load_harness_registry
