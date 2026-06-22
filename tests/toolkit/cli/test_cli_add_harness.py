@@ -19,6 +19,7 @@ import json
 from typer.testing import CliRunner
 
 from agentkit.toolkit.cli.cli import app
+from agentkit.toolkit.cli import cli_add
 from agentkit.toolkit.harness.env_mapping import to_runtime_env
 
 runner = CliRunner()
@@ -244,6 +245,55 @@ def test_registry_uri_space_name_uses_uri_endpoint_and_region(tmp_path, monkeypa
         "endpoint": "https://open.volcengineapi.com/",
         "region": "cn-beijing",
     }
+
+
+def test_resolve_a2a_space_id_by_name_paginates_all_spaces(monkeypatch):
+    calls = []
+
+    def fake_agentkit_post(*, endpoint, version, region, action, body):
+        calls.append(body)
+        if body["PageNumber"] == 1:
+            return (
+                {
+                    "Result": {
+                        "TotalCount": 101,
+                        "Items": [
+                            {
+                                "Id": f"as-{idx}",
+                                "Name": f"space-{idx}",
+                            }
+                            for idx in range(100)
+                        ],
+                    }
+                },
+                1,
+            )
+        return (
+            {
+                "Result": {
+                    "TotalCount": 101,
+                    "Items": [{"Id": "as-target", "Name": "target-space"}],
+                }
+            },
+            1,
+        )
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._agentkit_post",
+        fake_agentkit_post,
+    )
+
+    space_id = cli_add._resolve_a2a_space_id_by_name(
+        "target-space",
+        endpoint="https://agentkit.cn-beijing.volcengineapi.com/",
+        region="cn-beijing",
+    )
+
+    assert space_id == "as-target"
+    assert calls == [
+        {"PageNumber": 1, "PageSize": 100},
+        {"PageNumber": 2, "PageSize": 100},
+    ]
 
 
 def test_registry_disabled_turns_off_registry(tmp_path):
