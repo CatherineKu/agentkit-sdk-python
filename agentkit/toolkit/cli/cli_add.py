@@ -67,7 +67,6 @@ _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _REGISTRY_QUERY_KEYS = {
     "space_id",
     "space_name",
-    "a2a_space_name",
     "top_k",
     "endpoint",
     "region",
@@ -175,8 +174,7 @@ def _parse_registry_uri(value: str) -> dict:
 
     section: dict = {"type": "agentkit_a2a"}
     for key, raw_value in query.items():
-        target = "space_name" if key == "a2a_space_name" else key
-        section[target] = _parse_registry_int(key, raw_value)
+        section[key] = _parse_registry_int(key, raw_value)
     return section
 
 
