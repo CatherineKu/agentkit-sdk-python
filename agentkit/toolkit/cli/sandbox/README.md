@@ -376,28 +376,27 @@ Open a sandbox session's TOS path in TOS Browser.
 ```bash
 agentkit sandbox mount \
   --session-id 123456789 \
-  --oauth-url https://example.com/oauth \
-  --tos-bucket sandbox-bucket
-agentkit sandbox mount \
-  --tool-id t-example \
-  --session-id 123456789 \
-  --oauth-url https://example.com/oauth \
-  --tos-bucket sandbox-bucket
+  --oauth-url https://example.com/oauth
+agentkit sandbox mount --session-id 123456789
 ```
 
 Options:
 
 - `--session-id` / `--sid` / `-s`: required. Sandbox session ID to mount.
-- `--oauth-url`: required. Base URL used to fetch
-  `/.well-known/agentkit-cli`.
-- `--tos-bucket`: required. TOS bucket name.
-- `--tool-id`: optional. If omitted, the CLI reads the local
-  `.agentkit/sandbox/tools.json` cache by `--tool-type`; it does not create a
-  tool or list remote tools.
-- `--tool-type`: optional. `CodeEnv` or `SkillEnv`; defaults to `CodeEnv`.
+- `--oauth-url`: optional. Base URL used to fetch
+  `/.well-known/agentkit-cli`. If omitted, the CLI uses the newest file under
+  `~/.agentkit/auth/sessions/`, validates the file name matches
+  `agentkit-cli-*volces.com.json`, removes the `.json` suffix, and uses that as
+  the OAuth URL.
 
-The discovery document is saved to `.agentkit/sandbox/agentkit-cli`. The CLI
-extracts `role_trn`, `client_id`, and the user pool ID from `issuer`, then runs
+The CLI reads `tool_id` from `.agentkit/sandbox/sessions.json` by
+`--session-id`. If the session is not found locally, it syncs sessions for the
+current tool using the same resolution behavior as `agentkit sandbox get`, then
+checks the local session store again. After resolving the tool, the CLI calls
+`GetTool` and reads the bucket from `TosMountConfig.MountPoints[].BucketName`;
+if the tool has no TOS mount, the command exits with an error. The discovery
+document is saved to `.agentkit/sandbox/agentkit-cli`. The CLI extracts
+`role_trn`, `client_id`, and the user pool ID from `issuer`, then runs
 `open "<command>"`, where `command` is the generated `tosbrowser://...` URL.
 The response is JSON:
 
