@@ -29,7 +29,7 @@ import uuid
 import typer
 import yaml
 
-from agentkit.toolkit.cli.sandbox.utils import error
+from agentkit.toolkit.cli.sandbox.sandbox_client import error
 
 DEFAULT_RUN_CONFIG = "agentkit-sandbox-run.yaml"
 
