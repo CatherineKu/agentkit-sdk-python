@@ -85,6 +85,10 @@ def test_build_harness_overrides_matches_harness_overrides_model():
         tools="web_search,web_fetch",
         skills="s1",
         runtime="codex",
+        registry_space_id="space-1",
+        registry_top_k=5,
+        registry_endpoint="https://open.volcengineapi.com/",
+        registry_region="cn-beijing",
     )
     # model_name (not model.name); tools/skills as comma-separated STRINGS.
     assert overrides == {
@@ -93,6 +97,10 @@ def test_build_harness_overrides_matches_harness_overrides_model():
         "tools": "web_search,web_fetch",
         "skills": "s1",
         "runtime": "codex",
+        "registry_space_id": "space-1",
+        "registry_top_k": 5,
+        "registry_endpoint": "https://open.volcengineapi.com/",
+        "registry_region": "cn-beijing",
     }
 
 
@@ -159,6 +167,206 @@ def test_harness_invoke_posts_correct_request(tmp_path, monkeypatch):
     assert body["run_agent_request"]["max_llm_calls"] == 7
     # Partial overrides only (model_fields_set semantics).
     assert body["harness"] == {"system_prompt": "Reply PINEAPPLE."}
+
+
+def test_harness_invoke_posts_registry_overrides(tmp_path, monkeypatch):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+    captured = {}
+    _patch_post(monkeypatch, captured)
+
+    result = _run_harness(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry-space-id",
+            "space-override",
+            "--registry-top-k",
+            "8",
+            "--registry-endpoint",
+            "https://open.volcengineapi.com/",
+            "--registry-region",
+            "cn-beijing",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["harness"] == {
+        "registry_space_id": "space-override",
+        "registry_top_k": 8,
+        "registry_endpoint": "https://open.volcengineapi.com/",
+        "registry_region": "cn-beijing",
+    }
+
+
+def test_harness_invoke_registry_uri_override(tmp_path, monkeypatch):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+    captured = {}
+    _patch_post(monkeypatch, captured)
+
+    result = _run_invoke(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry",
+            "agentkit://a2a-registry?space_id=space-uri&top_k=4&region=cn-beijing",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["harness"] == {
+        "registry_space_id": "space-uri",
+        "registry_top_k": 4,
+        "registry_region": "cn-beijing",
+    }
+
+
+def test_harness_invoke_registry_space_name_resolves_to_space_id(tmp_path, monkeypatch):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+    captured = {}
+    resolved = {}
+    _patch_post(monkeypatch, captured)
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        resolved.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "space-from-name"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run_invoke(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry-space-name",
+            "space-name",
+            "--registry-endpoint",
+            "https://open.volcengineapi.com/",
+            "--registry-region",
+            "cn-beijing",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["harness"] == {
+        "registry_space_id": "space-from-name",
+        "registry_endpoint": "https://open.volcengineapi.com/",
+        "registry_region": "cn-beijing",
+    }
+    assert resolved == {
+        "space_name": "space-name",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
+def test_harness_invoke_registry_uri_space_name_resolves_to_space_id(tmp_path, monkeypatch):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+    captured = {}
+    resolved = {}
+    _patch_post(monkeypatch, captured)
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        resolved.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "space-from-uri-name"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run_invoke(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry",
+            "agentkit://a2a-registry?space_name=space-name&top_k=4&endpoint=https%3A%2F%2Fopen.volcengineapi.com%2F&region=cn-beijing",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["harness"] == {
+        "registry_space_id": "space-from-uri-name",
+        "registry_top_k": 4,
+        "registry_endpoint": "https://open.volcengineapi.com/",
+        "registry_region": "cn-beijing",
+    }
+    assert resolved == {
+        "space_name": "space-name",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
+def test_harness_invoke_registry_uri_rejects_registry_space_name_alias(tmp_path):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+
+    result = _run_invoke(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry",
+            "agentkit://a2a-registry?registry_space_name=space-name",
+        ]
+    )
+
+    assert result.exit_code == 1
+    assert "Unsupported registry query param(s): registry_space_name" in result.output
+
+
+def test_harness_invoke_registry_http_url_override(tmp_path, monkeypatch):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+    captured = {}
+    _patch_post(monkeypatch, captured)
+    discovery_url = (
+        "https://open.volcengineapi.com/?Action=Discover&space_id=space-url"
+    )
+
+    result = _run_invoke(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry",
+            discovery_url,
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["harness"] == {
+        "registry_endpoint": discovery_url,
+        "registry_space_id": "space-url",
+    }
 
 
 def test_harness_invoke_no_overrides_omits_harness_key(tmp_path, monkeypatch):

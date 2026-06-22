@@ -19,6 +19,7 @@ from typing import Optional, Any
 import base64
 import binascii
 import json
+import os
 import typer
 from typer.core import TyperGroup
 from rich.console import Console
@@ -27,6 +28,7 @@ import random
 import uuid
 from agentkit.toolkit.config import get_config
 import logging
+from urllib.parse import parse_qs, urlparse
 
 # Note: Avoid importing heavy packages at the top to keep CLI startup fast
 logger = logging.getLogger(__name__)
@@ -607,13 +609,18 @@ def build_harness_overrides(
     tools: Optional[str],
     skills: Optional[str],
     runtime: Optional[str],
+    registry_space_id: Optional[str] = None,
+    registry_top_k: Optional[int] = None,
+    registry_endpoint: Optional[str] = None,
+    registry_region: Optional[str] = None,
 ) -> dict:
     """Collect the non-null fields for the harness app's ``HarnessOverrides``.
 
-    Field names/shapes match veadk's ``HarnessOverrides`` model: ``model_name``
-    (string), ``tools`` / ``skills`` as comma-separated strings, ``system_prompt``,
-    ``runtime``. Only the keys present here are applied server-side
-    (``model_fields_set``); unset fields keep the deployed harness's values.
+    Field names/shapes match AgentKit's ``HarnessOverrides`` model:
+    ``model_name`` (string), ``tools`` / ``skills`` as comma-separated strings,
+    ``system_prompt``, ``runtime``, and optional registry overrides. Only the
+    keys present here are applied server-side (``model_fields_set``); unset
+    fields keep the deployed harness's values.
     """
     overrides: dict[str, Any] = {}
     if system_prompt is not None:
@@ -626,6 +633,156 @@ def build_harness_overrides(
         overrides["skills"] = skills
     if runtime is not None:
         overrides["runtime"] = runtime
+    if registry_space_id is not None:
+        overrides["registry_space_id"] = registry_space_id
+    if registry_top_k is not None:
+        overrides["registry_top_k"] = registry_top_k
+    if registry_endpoint is not None:
+        overrides["registry_endpoint"] = registry_endpoint
+    if registry_region is not None:
+        overrides["registry_region"] = registry_region
+    return overrides
+
+
+_INVOKE_REGISTRY_QUERY_ALIASES = {
+    "space_id": "registry_space_id",
+    "registry_space_id": "registry_space_id",
+    "space_name": "registry_space_name",
+    "top_k": "registry_top_k",
+    "registry_top_k": "registry_top_k",
+    "endpoint": "registry_endpoint",
+    "registry_endpoint": "registry_endpoint",
+    "region": "registry_region",
+    "registry_region": "registry_region",
+}
+_INVOKE_REGISTRY_INT_KEYS = {"registry_top_k"}
+
+
+def _parse_harness_registry_override(value: Optional[str]) -> dict[str, Any]:
+    """Parse ``--registry`` into one-time harness registry overrides.
+
+    Supported forms:
+    - agentkit://a2a-registry?space_id=xxx&top_k=3&region=cn-beijing
+    - https://... (treated as registry_endpoint; recognized query params are
+      also extracted when present)
+    """
+    if value is None:
+        return {}
+
+    raw = value.strip()
+    if not raw:
+        return {}
+
+    parsed = urlparse(raw)
+    overrides: dict[str, Any] = {}
+
+    query = {
+        key.replace("-", "_"): values[-1]
+        for key, values in parse_qs(parsed.query, keep_blank_values=False).items()
+        if values and values[-1] != ""
+    }
+
+    if parsed.scheme == "agentkit":
+        if parsed.netloc != "a2a-registry" or parsed.path not in {"", "/"}:
+            raise ValueError(
+                "Unsupported registry URI. Use "
+                '`agentkit://a2a-registry?space_id=xxx&top_k=3` or an http(s) URL.'
+            )
+    elif parsed.scheme in {"http", "https"}:
+        overrides["registry_endpoint"] = raw
+    else:
+        raise ValueError(
+            "Unsupported registry value. Use "
+            '`agentkit://a2a-registry?space_id=xxx&top_k=3` or an http(s) URL.'
+        )
+
+    unknown = sorted(set(query) - set(_INVOKE_REGISTRY_QUERY_ALIASES))
+    if unknown and parsed.scheme == "agentkit":
+        raise ValueError(
+            f"Unsupported registry query param(s): {', '.join(unknown)}. "
+            f"Known: {', '.join(sorted(_INVOKE_REGISTRY_QUERY_ALIASES))}"
+        )
+
+    for key, raw_value in query.items():
+        if key not in _INVOKE_REGISTRY_QUERY_ALIASES:
+            continue
+        target = _INVOKE_REGISTRY_QUERY_ALIASES[key]
+        if target in _INVOKE_REGISTRY_INT_KEYS:
+            try:
+                overrides[target] = int(str(raw_value))
+            except ValueError as exc:
+                raise ValueError(
+                    f"Registry param `{key}` must be an integer, got {raw_value!r}."
+                ) from exc
+        else:
+            overrides[target] = raw_value
+
+    return overrides
+
+
+def _resolve_harness_registry_space_name(
+    overrides: dict[str, Any],
+    *,
+    registry_endpoint: Optional[str],
+    registry_region: Optional[str],
+) -> None:
+    if overrides.get("registry_space_id"):
+        overrides.pop("registry_space_name", None)
+        return
+
+    space_name = overrides.pop("registry_space_name", None)
+    if not space_name:
+        return
+
+    from agentkit.toolkit.cli.cli_add import (
+        _default_agentkit_endpoint,
+        _resolve_a2a_space_id_by_name,
+    )
+
+    resolved_region = (
+        registry_region
+        or overrides.get("registry_region")
+        or os.getenv("AGENTKIT_REGION")
+        or os.getenv("VOLCENGINE_REGION")
+        or "cn-beijing"
+    )
+    resolved_endpoint = (
+        registry_endpoint
+        or overrides.get("registry_endpoint")
+        or _default_agentkit_endpoint(str(resolved_region))
+    )
+    overrides["registry_space_id"] = _resolve_a2a_space_id_by_name(
+        str(space_name),
+        endpoint=str(resolved_endpoint),
+        region=str(resolved_region),
+    )
+
+
+def _merge_harness_registry_overrides(
+    *,
+    registry: Optional[str],
+    registry_space_id: Optional[str],
+    registry_space_name: Optional[str],
+    registry_top_k: Optional[int],
+    registry_endpoint: Optional[str],
+    registry_region: Optional[str],
+) -> dict[str, Any]:
+    overrides = _parse_harness_registry_override(registry)
+    if registry_space_id is not None:
+        overrides["registry_space_id"] = registry_space_id
+    if registry_space_name is not None:
+        overrides["registry_space_name"] = registry_space_name
+    if registry_top_k is not None:
+        overrides["registry_top_k"] = registry_top_k
+    if registry_endpoint is not None:
+        overrides["registry_endpoint"] = registry_endpoint
+    if registry_region is not None:
+        overrides["registry_region"] = registry_region
+    _resolve_harness_registry_space_name(
+        overrides,
+        registry_endpoint=registry_endpoint,
+        registry_region=registry_region,
+    )
     return overrides
 
 
@@ -826,6 +983,39 @@ def harness_command(
     runtime: str = typer.Option(
         None, "--runtime", help="Override the harness runtime backend for this call."
     ),
+    registry_space_id: str = typer.Option(
+        None,
+        "--registry-space-id",
+        help="Override the A2A registry space id for this invocation.",
+    ),
+    registry_space_name: str = typer.Option(
+        None,
+        "--registry-space-name",
+        help="Override the A2A registry space name for this invocation.",
+    ),
+    registry: str = typer.Option(
+        None,
+        "--registry",
+        help=(
+            "Override A2A registry for this invocation. Accepts "
+            "`agentkit://a2a-registry?space_id=xxx&top_k=3` or an http(s) URL."
+        ),
+    ),
+    registry_top_k: int = typer.Option(
+        None,
+        "--registry-top-k",
+        help="Override the number of A2A AgentCards to retrieve for this invocation.",
+    ),
+    registry_endpoint: str = typer.Option(
+        None,
+        "--registry-endpoint",
+        help="Override the A2A registry OpenAPI endpoint for this invocation.",
+    ),
+    registry_region: str = typer.Option(
+        None,
+        "--registry-region",
+        help="Override the A2A registry OpenAPI region for this invocation.",
+    ),
     apikey: str = typer.Option(
         None,
         "--apikey",
@@ -859,11 +1049,29 @@ def harness_command(
         # Per-call overrides
         agentkit invoke harness my-harness --system-prompt "Be terse." "What is 2+2?"
         agentkit invoke harness my-harness --max-llm-calls 10 "Plan a trip."
+        agentkit invoke harness my-harness --registry-space-id as-xxx "Find an agent."
     """
     import requests
+    from agentkit.toolkit.cli.cli_add import _A2ARegisterError
     from agentkit.toolkit.harness import load_harness_registry
 
     console.print("[cyan]Invoking harness...[/cyan]")
+
+    try:
+        registry_overrides = _merge_harness_registry_overrides(
+            registry=registry,
+            registry_space_id=registry_space_id,
+            registry_space_name=registry_space_name,
+            registry_top_k=registry_top_k,
+            registry_endpoint=registry_endpoint,
+            registry_region=registry_region,
+        )
+    except _A2ARegisterError as e:
+        console.print(f"[red]Error: failed to resolve A2A space name: {e}[/red]")
+        raise typer.Exit(1)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        raise typer.Exit(1)
 
     registry = load_harness_registry(directory)
     entry = registry.get(name)
@@ -932,7 +1140,15 @@ def harness_command(
             prompt=message,
             session_id=session_id,
             overrides=build_harness_overrides(
-                system_prompt, model_name, tools, skills, runtime
+                system_prompt,
+                model_name,
+                tools,
+                skills,
+                runtime,
+                registry_space_id=registry_overrides.get("registry_space_id"),
+                registry_top_k=registry_overrides.get("registry_top_k"),
+                registry_endpoint=registry_overrides.get("registry_endpoint"),
+                registry_region=registry_overrides.get("registry_region"),
             ),
             raw=raw,
         )
@@ -955,7 +1171,15 @@ def harness_command(
         "run_agent_request": run_agent_request,
     }
     overrides = build_harness_overrides(
-        system_prompt, model_name, tools, skills, runtime
+        system_prompt,
+        model_name,
+        tools,
+        skills,
+        runtime,
+        registry_overrides.get("registry_space_id"),
+        registry_overrides.get("registry_top_k"),
+        registry_overrides.get("registry_endpoint"),
+        registry_overrides.get("registry_region"),
     )
     if overrides:
         body["harness"] = overrides
