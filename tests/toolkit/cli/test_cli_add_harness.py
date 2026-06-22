@@ -164,6 +164,88 @@ def test_registry_flags_write_agentkit_a2a_section(tmp_path):
     assert data["include_tools_every_turn"] is True
 
 
+def test_registry_space_name_resolves_to_space_id(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        captured.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "space-from-name"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run(
+        [
+            "harness",
+            "--name",
+            "h",
+            "--registry-space-name",
+            "space-name",
+            "--registry-endpoint",
+            "https://agentkit.cn-beijing.volcengineapi.com/",
+            "--registry-region",
+            "cn-beijing",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads((tmp_path / "h.harness.json").read_text())
+    assert data["registry"] == {
+        "type": "agentkit_a2a",
+        "space_id": "space-from-name",
+        "endpoint": "https://agentkit.cn-beijing.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+    assert captured == {
+        "space_name": "space-name",
+        "endpoint": "https://agentkit.cn-beijing.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
+def test_registry_uri_space_name_uses_uri_endpoint_and_region(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        captured.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "space-from-uri-name"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run(
+        [
+            "harness",
+            "--name",
+            "h",
+            "--registry",
+            "agentkit://a2a-registry?space_name=space-name&endpoint=https%3A%2F%2Fopen.volcengineapi.com%2F&region=cn-beijing",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads((tmp_path / "h.harness.json").read_text())
+    assert data["registry"] == {
+        "type": "agentkit_a2a",
+        "space_id": "space-from-uri-name",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+    assert captured == {
+        "space_name": "space-name",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
 def test_registry_disabled_turns_off_registry(tmp_path):
     result = _run(
         [
@@ -269,6 +351,67 @@ def test_add_harness_register_self_resolves_runtime_and_space(
     assert captured["tags"] == [{"Key": "env", "Value": "test"}]
     assert captured["endpoint"] == "https://agentkit.cn-beijing.volcengineapi.com/"
     assert captured["region"] == "cn-beijing"
+
+
+def test_add_harness_register_self_resolves_space_name(
+    tmp_path, monkeypatch
+):
+    (tmp_path / "harness.json").write_text(
+        json.dumps({"h": {"url": "https://x", "runtime_id": "r-test"}})
+    )
+    captured = {}
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        captured["resolved_space"] = {
+            "space_name": space_name,
+            "endpoint": endpoint,
+            "region": region,
+        }
+        return "space-from-name"
+
+    def fake_create_a2a_agent(**kwargs):
+        captured.update(kwargs)
+        return {
+            "outcome": "success",
+            "agent_id": "a-test",
+            "tags": [],
+            "diagnostics": {"request_id": "req-1"},
+        }
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._create_a2a_agent",
+        fake_create_a2a_agent,
+    )
+
+    result = _run(
+        [
+            "harness",
+            "--name",
+            "h",
+            "--register-self",
+            "--register-space-name",
+            "space-name",
+            "--register-endpoint",
+            "https://agentkit.cn-beijing.volcengineapi.com/",
+            "--register-region",
+            "cn-beijing",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["resolved_space"] == {
+        "space_name": "space-name",
+        "endpoint": "https://agentkit.cn-beijing.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+    assert captured["a2a_space_id"] == "space-from-name"
+    assert captured["runtime_id"] == "r-test"
 
 
 def test_add_harness_register_self_requires_harness_json_entry(tmp_path):

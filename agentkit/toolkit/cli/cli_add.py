@@ -66,6 +66,8 @@ _SHORT_TERM_MEMORY_TYPES = ("local", "sqlite", "mysql", "postgresql")
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _REGISTRY_QUERY_KEYS = {
     "space_id",
+    "space_name",
+    "a2a_space_name",
     "top_k",
     "endpoint",
     "region",
@@ -173,7 +175,8 @@ def _parse_registry_uri(value: str) -> dict:
 
     section: dict = {"type": "agentkit_a2a"}
     for key, raw_value in query.items():
-        section[key] = _parse_registry_int(key, raw_value)
+        target = "space_name" if key == "a2a_space_name" else key
+        section[target] = _parse_registry_int(key, raw_value)
     return section
 
 
@@ -186,6 +189,7 @@ def _apply_registry_config(
     data: dict,
     registry: Optional[str],
     registry_space_id: Optional[str],
+    registry_space_name: Optional[str],
     registry_top_k: Optional[int],
     registry_endpoint: Optional[str],
     registry_region: Optional[str],
@@ -195,6 +199,7 @@ def _apply_registry_config(
         for value in [
             registry,
             registry_space_id,
+            registry_space_name,
             registry_top_k,
             registry_endpoint,
             registry_region,
@@ -211,6 +216,7 @@ def _apply_registry_config(
         section.update(_parse_registry_uri(registry))
 
     _set_registry_value(section, "space_id", registry_space_id)
+    _set_registry_value(section, "space_name", registry_space_name)
     _set_registry_value(section, "top_k", registry_top_k)
     _set_registry_value(section, "endpoint", registry_endpoint)
     _set_registry_value(section, "region", registry_region)
@@ -219,10 +225,33 @@ def _apply_registry_config(
         section["type"] = "agentkit_a2a"
 
     if section.get("type") == "agentkit_a2a" and not section.get("space_id"):
+        space_name = section.pop("space_name", None)
+        if space_name:
+            resolved_region = (
+                registry_region
+                or section.get("region")
+                or os.getenv("AGENTKIT_REGION")
+                or os.getenv("VOLCENGINE_REGION")
+                or "cn-beijing"
+            )
+            resolved_endpoint = (
+                registry_endpoint
+                or section.get("endpoint")
+                or _default_agentkit_endpoint(resolved_region)
+            )
+            section["space_id"] = _resolve_a2a_space_id_by_name(
+                str(space_name),
+                endpoint=str(resolved_endpoint),
+                region=str(resolved_region),
+            )
+    else:
+        section.pop("space_name", None)
+
+    if section.get("type") == "agentkit_a2a" and not section.get("space_id"):
         raise ValueError(
             "Registry space_id is required. Use "
             '`--registry "agentkit://a2a-registry?space_id=xxx"` '
-            "or `--registry-space-id xxx`."
+            "or `--registry-space-id xxx` / `--registry-space-name name`."
         )
 
     data["registry"] = section
@@ -347,6 +376,59 @@ def _agentkit_post(
     return data, duration_ms
 
 
+def _resolve_a2a_space_id_by_name(
+    space_name: str,
+    *,
+    endpoint: str,
+    region: str,
+) -> str:
+    normalized_name = space_name.strip()
+    if not normalized_name:
+        raise ValueError("A2A space name must not be empty.")
+
+    matches: list[dict[str, Any]] = []
+    page_number = 1
+    page_size = 100
+    while True:
+        response, _ = _agentkit_post(
+            endpoint=endpoint,
+            version=_REGISTER_DEFAULT_VERSION,
+            region=region,
+            action="ListA2aSpaces",
+            body={"PageNumber": page_number, "PageSize": page_size},
+        )
+        result = response.get("Result") or {}
+        items = result.get("Items") or []
+        if not isinstance(items, list):
+            raise _A2ARegisterError("ListA2aSpaces response Items is not a list")
+        matches.extend(
+            item
+            for item in items
+            if isinstance(item, dict) and item.get("Name") == normalized_name
+        )
+
+        total_count = int(result.get("TotalCount") or 0)
+        if page_number * page_size >= total_count or not items:
+            break
+        page_number += 1
+
+    if not matches:
+        raise ValueError(f"A2A space name '{normalized_name}' was not found.")
+    if len(matches) > 1:
+        ids = ", ".join(str(item.get("Id", "")) for item in matches if item.get("Id"))
+        raise ValueError(
+            f"A2A space name '{normalized_name}' matched multiple spaces"
+            + (f": {ids}" if ids else ".")
+        )
+
+    space_id = matches[0].get("Id")
+    if not space_id:
+        raise _A2ARegisterError(
+            f"ListA2aSpaces result for '{normalized_name}' is missing Id"
+        )
+    return str(space_id)
+
+
 def _create_a2a_agent(
     *,
     a2a_space_id: str,
@@ -411,16 +493,35 @@ def _resolve_self_register_entry(directory: str, name: str) -> dict[str, Any]:
     return entry
 
 
-def _resolve_register_space_id(data: dict, space_id: Optional[str]) -> str:
+def _resolve_register_space_id(
+    data: dict,
+    space_id: Optional[str],
+    space_name: Optional[str],
+    *,
+    endpoint: str,
+    region: str,
+) -> str:
     if space_id:
         return space_id
+    if space_name:
+        return _resolve_a2a_space_id_by_name(
+            space_name,
+            endpoint=endpoint,
+            region=region,
+        )
     registry = data.get("registry") if isinstance(data, dict) else None
     if isinstance(registry, dict) and registry.get("space_id"):
         return str(registry["space_id"])
+    if isinstance(registry, dict) and registry.get("space_name"):
+        return _resolve_a2a_space_id_by_name(
+            str(registry["space_name"]),
+            endpoint=endpoint,
+            region=region,
+        )
     console.print(
         "[red]Error: A2A space id is required for registration. Pass "
-        "--register-space-id, --registry-space-id, or set `registry.space_id` "
-        "in the harness spec.[/red]"
+        "--register-space-id / --register-space-name, --registry-space-id / "
+        "--registry-space-name, or set `registry.space_id` in the harness spec.[/red]"
     )
     raise typer.Exit(1)
 
@@ -518,6 +619,11 @@ def harness_command(
     registry_space_id: Optional[str] = typer.Option(
         None, "--registry-space-id", help="AgentKit A2A SpaceId."
     ),
+    registry_space_name: Optional[str] = typer.Option(
+        None,
+        "--registry-space-name",
+        help="AgentKit A2A space name. Resolved to space_id via ListA2aSpaces.",
+    ),
     registry_top_k: Optional[int] = typer.Option(
         None,
         "--registry-top-k",
@@ -539,6 +645,11 @@ def harness_command(
         None,
         "--register-space-id",
         help="A2A registry space id for registration. Defaults to registry.space_id.",
+    ),
+    register_space_name: Optional[str] = typer.Option(
+        None,
+        "--register-space-name",
+        help="A2A registry space name for registration. Resolved via ListA2aSpaces.",
     ),
     register_network_type: str = typer.Option(
         "public",
@@ -789,10 +900,16 @@ def harness_command(
             data,
             registry,
             registry_space_id,
+            registry_space_name,
             registry_top_k,
             registry_endpoint,
             registry_region,
         )
+    except _A2ARegisterError as exc:
+        console.print(f"[red]Error: failed to resolve A2A space name: {exc.message}[/red]")
+        if exc.diagnostics:
+            console.print(json.dumps(exc.diagnostics, ensure_ascii=False, indent=2))
+        raise typer.Exit(1) from exc
     except ValueError as exc:
         console.print(f"[red]Error: {exc}[/red]")
         raise typer.Exit(1) from exc
@@ -803,7 +920,33 @@ def harness_command(
 
     if register_self:
         entry = _resolve_self_register_entry(directory, name)
-        resolved_space_id = _resolve_register_space_id(data, register_space_id)
+        register_resolved_region = (
+            register_region
+            or os.getenv("AGENTKIT_REGION")
+            or os.getenv("VOLCENGINE_REGION")
+            or "cn-beijing"
+        )
+        register_resolved_endpoint = register_endpoint or _default_agentkit_endpoint(
+            register_resolved_region
+        )
+        try:
+            resolved_space_id = _resolve_register_space_id(
+                data,
+                register_space_id,
+                register_space_name,
+                endpoint=register_resolved_endpoint,
+                region=register_resolved_region,
+            )
+        except _A2ARegisterError as exc:
+            console.print(
+                f"[red]Error: failed to resolve A2A space name: {exc.message}[/red]"
+            )
+            if exc.diagnostics:
+                console.print(json.dumps(exc.diagnostics, ensure_ascii=False, indent=2))
+            raise typer.Exit(1) from exc
+        except ValueError as exc:
+            console.print(f"[red]Error: {exc}[/red]")
+            raise typer.Exit(1) from exc
         console.print(f"[cyan]Harness URL:[/cyan] {entry['url']}")
         _register_a2a_runtime_agent(
             subject=f"harness '{name}'",
@@ -811,8 +954,8 @@ def harness_command(
             runtime_id=str(entry["runtime_id"]),
             network_type=register_network_type,
             tags=register_tag,
-            endpoint=register_endpoint,
-            region=register_region,
+            endpoint=register_resolved_endpoint,
+            region=register_resolved_region,
         )
 
 
