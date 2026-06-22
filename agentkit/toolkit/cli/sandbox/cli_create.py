@@ -50,7 +50,7 @@ from agentkit.toolkit.cli.sandbox.tos_config import (
     DEFAULT_TOS_LOCAL_PATH,
     build_create_tool_tos_mount_config,
 )
-from agentkit.toolkit.cli.sandbox.utils import error
+from agentkit.toolkit.cli.sandbox.sandbox_client import error
 from agentkit.toolkit.volcengine.services.tos_service import (
     TOSService,
     TOSServiceConfig,

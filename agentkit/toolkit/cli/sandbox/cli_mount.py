@@ -30,7 +30,7 @@ from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.session_create import SANDBOX_TOOL_ID_ENV
 from agentkit.toolkit.cli.sandbox.session_sync import sync_remote_sessions
-from agentkit.toolkit.cli.sandbox.utils import (
+from agentkit.toolkit.cli.sandbox.sandbox_client import (
     echo_json,
     error,
     find_session_result,

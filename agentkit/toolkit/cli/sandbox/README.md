@@ -606,4 +606,4 @@ Example:
 - `cli_exec.py`: streaming exec command implementation.
 - `cli_run.py`: multi-tab exec runner implementation.
 - `cli_file.py`: file upload, download, and list command implementation.
-- `utils.py`: shared store, URL, JSON, and error helpers.
+- `sandbox_client.py`: shared store, URL, JSON, and error helpers.

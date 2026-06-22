@@ -194,10 +194,10 @@ def _reset_fake_client():
 
 
 def _patch_store_path(monkeypatch, tmp_path):
-    import agentkit.toolkit.cli.sandbox.utils as sandbox_utils
+    import agentkit.toolkit.cli.sandbox.sandbox_client as sandbox_client
 
     store_path = tmp_path / "sessions.json"
-    monkeypatch.setattr(sandbox_utils, "_get_session_store_path", lambda: store_path)
+    monkeypatch.setattr(sandbox_client, "_get_session_store_path", lambda: store_path)
     return store_path
 
 
@@ -4263,7 +4263,7 @@ def test_session_store_tracks_terminal_shell_ids_thread_safely(
     monkeypatch,
     tmp_path,
 ) -> None:
-    import agentkit.toolkit.cli.sandbox.utils as sandbox_utils
+    import agentkit.toolkit.cli.sandbox.sandbox_client as sandbox_client
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     store_path.write_text(
@@ -4286,7 +4286,7 @@ def test_session_store_tracks_terminal_shell_ids_thread_safely(
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(
             executor.map(
-                lambda shell_id: sandbox_utils.add_session_terminal_shell_id(
+                lambda shell_id: sandbox_client.add_session_terminal_shell_id(
                     "user-1",
                     shell_id,
                 ),
@@ -4302,7 +4302,7 @@ def test_session_store_tracks_terminal_shell_ids_thread_safely(
     with ThreadPoolExecutor(max_workers=8) as executor:
         list(
             executor.map(
-                lambda shell_id: sandbox_utils.remove_session_terminal_shell_id(
+                lambda shell_id: sandbox_client.remove_session_terminal_shell_id(
                     "user-1",
                     shell_id,
                 ),

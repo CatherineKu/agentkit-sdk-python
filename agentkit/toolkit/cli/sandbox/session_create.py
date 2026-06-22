@@ -48,7 +48,7 @@ from agentkit.toolkit.cli.sandbox.tool_resolve import (
     DEFAULT_SANDBOX_TOOL_TYPE,
     resolve_sandbox_tool_id,
 )
-from agentkit.toolkit.cli.sandbox.utils import (
+from agentkit.toolkit.cli.sandbox.sandbox_client import (
     error,
     find_session_result,
     save_session_result,

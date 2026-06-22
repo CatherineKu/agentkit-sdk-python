@@ -19,7 +19,7 @@ from __future__ import annotations
 from typing import Optional
 
 from agentkit.sdk.tools import types as tools_types
-from agentkit.toolkit.cli.sandbox.utils import error
+from agentkit.toolkit.cli.sandbox.sandbox_client import error
 from agentkit.toolkit.volcengine.services.tos_service import (
     TOSMountConfig,
     TOSService,
