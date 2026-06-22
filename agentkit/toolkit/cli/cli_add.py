@@ -437,22 +437,28 @@ def _create_a2a_agent(
     }
 
 
-def _resolve_register_runtime_id(
-    directory: str, name: str, runtime_id: Optional[str]
-) -> str:
-    if runtime_id:
-        return runtime_id
+def _resolve_self_register_entry(directory: str, name: str) -> dict[str, Any]:
     registry_path = Path(directory).resolve() / "harness.json"
     registry = _load_json(registry_path)
     entry = registry.get(name)
-    if isinstance(entry, dict) and entry.get("runtime_id"):
-        return str(entry["runtime_id"])
-    console.print(
-        f"[red]Error: runtime id is required for --register-a2a. Pass "
-        f"--register-runtime-id or ensure {registry_path} contains harness "
-        f"'{name}' with runtime_id.[/red]"
-    )
-    raise typer.Exit(1)
+    if not isinstance(entry, dict):
+        console.print(
+            f"[red]Error: cannot register harness '{name}'. "
+            f"{registry_path} does not contain an entry for '{name}'. "
+            "Deploy the harness first or check --directory.[/red]"
+        )
+        raise typer.Exit(1)
+
+    missing = [field for field in ("url", "runtime_id") if not entry.get(field)]
+    if missing:
+        console.print(
+            f"[red]Error: cannot register harness '{name}'. "
+            f"{registry_path} entry is missing required field(s): "
+            f"{', '.join(missing)}. Deploy the harness again so harness.json "
+            "records url and runtime_id.[/red]"
+        )
+        raise typer.Exit(1)
+    return entry
 
 
 def _resolve_register_space_id(data: dict, space_id: Optional[str]) -> str:
@@ -462,7 +468,7 @@ def _resolve_register_space_id(data: dict, space_id: Optional[str]) -> str:
     if isinstance(registry, dict) and registry.get("space_id"):
         return str(registry["space_id"])
     console.print(
-        "[red]Error: A2A space id is required for --register-a2a. Pass "
+        "[red]Error: A2A space id is required for registration. Pass "
         "--register-space-id, --registry-space-id, or set `registry.space_id` "
         "in the harness spec.[/red]"
     )
@@ -471,11 +477,9 @@ def _resolve_register_space_id(data: dict, space_id: Optional[str]) -> str:
 
 def _register_a2a_runtime_agent(
     *,
-    name: str,
-    directory: str,
-    data: dict,
-    space_id: Optional[str],
-    runtime_id: Optional[str],
+    subject: str,
+    space_id: str,
+    runtime_id: str,
     network_type: str,
     project_name: Optional[str],
     tags: list[str],
@@ -499,18 +503,16 @@ def _register_a2a_runtime_agent(
         or "cn-beijing"
     )
     resolved_endpoint = endpoint or _default_agentkit_endpoint(resolved_region)
-    resolved_runtime_id = _resolve_register_runtime_id(directory, name, runtime_id)
-    resolved_space_id = _resolve_register_space_id(data, space_id)
     parsed_tags = _parse_register_tags(tags)
 
     console.print(
-        f"[cyan]Registering harness '{name}' runtime {resolved_runtime_id} "
-        f"to A2A space {resolved_space_id}...[/cyan]"
+        f"[cyan]Registering {subject} runtime {runtime_id} "
+        f"to A2A space {space_id}...[/cyan]"
     )
     try:
         result = _create_a2a_agent(
-            a2a_space_id=resolved_space_id,
-            runtime_id=resolved_runtime_id,
+            a2a_space_id=space_id,
+            runtime_id=runtime_id,
             network_type=normalized_network_type,
             project_name=project_name,
             tags=parsed_tags or None,
@@ -607,20 +609,15 @@ def harness_command(
         help="A2A task polling interval in milliseconds.",
     ),
     # --- A2A registry registration action -----------------------------------
-    register_a2a: bool = typer.Option(
+    register_self: bool = typer.Option(
         False,
-        "--register-a2a",
-        help="Register this deployed harness Runtime Agent to the A2A registry.",
+        "--register-self",
+        help="Register this deployed harness Runtime Agent from harness.json.",
     ),
     register_space_id: Optional[str] = typer.Option(
         None,
         "--register-space-id",
         help="A2A registry space id for registration. Defaults to registry.space_id.",
-    ),
-    register_runtime_id: Optional[str] = typer.Option(
-        None,
-        "--register-runtime-id",
-        help="Runtime id to register. Defaults to harness.json[name].runtime_id.",
     ),
     register_network_type: str = typer.Option(
         "public",
@@ -904,13 +901,14 @@ def harness_command(
     _write_spec(target, file_format, data)
     console.print(f"[green]✓ Wrote harness config: {target}[/green]")
 
-    if register_a2a:
+    if register_self:
+        entry = _resolve_self_register_entry(directory, name)
+        resolved_space_id = _resolve_register_space_id(data, register_space_id)
+        console.print(f"[cyan]Harness URL:[/cyan] {entry['url']}")
         _register_a2a_runtime_agent(
-            name=name,
-            directory=directory,
-            data=data,
-            space_id=register_space_id,
-            runtime_id=register_runtime_id,
+            subject=f"harness '{name}'",
+            space_id=resolved_space_id,
+            runtime_id=str(entry["runtime_id"]),
             network_type=register_network_type,
             project_name=register_project_name,
             tags=register_tag,

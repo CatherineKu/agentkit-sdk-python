@@ -235,7 +235,7 @@ def test_deploy_spec_loader_accepts_harness_yaml(tmp_path):
     assert data["registry"]["type"] == "agentkit_a2a"
 
 
-def test_add_harness_register_a2a_resolves_runtime_and_space(
+def test_add_harness_register_self_resolves_runtime_and_space(
     tmp_path, monkeypatch
 ):
     (tmp_path / "harness.json").write_text(
@@ -264,7 +264,7 @@ def test_add_harness_register_a2a_resolves_runtime_and_space(
             "h",
             "--registry-space-id",
             "space-test",
-            "--register-a2a",
+            "--register-self",
             "--register-tag",
             "env=test",
             "--register-project-name",
@@ -278,6 +278,7 @@ def test_add_harness_register_a2a_resolves_runtime_and_space(
 
     assert result.exit_code == 0, result.output
     assert "A2A agent registered" in result.output
+    assert "Harness URL:" in result.output
     assert captured["a2a_space_id"] == "space-test"
     assert captured["runtime_id"] == "r-test"
     assert captured["network_type"] == "public"
@@ -288,7 +289,7 @@ def test_add_harness_register_a2a_resolves_runtime_and_space(
     assert captured["region"] == "cn-beijing"
 
 
-def test_add_harness_register_a2a_requires_runtime_id(tmp_path):
+def test_add_harness_register_self_requires_harness_json_entry(tmp_path):
     result = _run(
         [
             "harness",
@@ -296,27 +297,48 @@ def test_add_harness_register_a2a_requires_runtime_id(tmp_path):
             "h",
             "--registry-space-id",
             "space-test",
-            "--register-a2a",
+            "--register-self",
             "--directory",
             str(tmp_path),
         ]
     )
 
     assert result.exit_code == 1
-    assert "runtime id is required" in result.output
+    assert "does not contain an entry for 'h'" in result.output
 
 
-def test_add_harness_register_a2a_rejects_invalid_network_type(tmp_path):
+def test_add_harness_register_self_requires_url_and_runtime_id(tmp_path):
+    (tmp_path / "harness.json").write_text(json.dumps({"h": {"url": "https://x"}}))
+
     result = _run(
         [
             "harness",
             "--name",
             "h",
-            "--register-a2a",
-            "--register-runtime-id",
-            "r-test",
+            "--registry-space-id",
+            "space-test",
+            "--register-self",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert result.exit_code == 1
+    assert "missing required field(s): runtime_id" in result.output
+
+
+def test_add_harness_register_self_rejects_invalid_network_type(tmp_path):
+    (tmp_path / "harness.json").write_text(
+        json.dumps({"h": {"url": "https://x", "runtime_id": "r-test"}})
+    )
+    result = _run(
+        [
+            "harness",
+            "--name",
+            "h",
             "--register-space-id",
             "space-test",
+            "--register-self",
             "--register-network-type",
             "internet",
             "--directory",
@@ -326,3 +348,46 @@ def test_add_harness_register_a2a_rejects_invalid_network_type(tmp_path):
 
     assert result.exit_code == 1
     assert "--register-network-type must be one of" in result.output
+
+
+def test_top_level_register_registers_any_runtime(monkeypatch):
+    captured = {}
+
+    def fake_create_a2a_agent(**kwargs):
+        captured.update(kwargs)
+        return {
+            "outcome": "success",
+            "agent_id": "a-test",
+            "tags": [],
+            "diagnostics": {"request_id": "req-1"},
+        }
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._create_a2a_agent",
+        fake_create_a2a_agent,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "register",
+            "--space-id",
+            "space-test",
+            "--runtime-id",
+            "r-test",
+            "--network-type",
+            "public",
+            "--tag",
+            "env=test",
+            "--endpoint",
+            "https://agentkit.cn-beijing.volcengineapi.com/",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "A2A agent registered" in result.output
+    assert captured["a2a_space_id"] == "space-test"
+    assert captured["runtime_id"] == "r-test"
+    assert captured["network_type"] == "public"
+    assert captured["tags"] == [{"Key": "env", "Value": "test"}]
+    assert captured["endpoint"] == "https://agentkit.cn-beijing.volcengineapi.com/"
