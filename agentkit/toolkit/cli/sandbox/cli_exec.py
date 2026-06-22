@@ -31,6 +31,7 @@ from typing import Iterator, Optional
 
 import typer
 
+from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.toolkit.cli.sandbox.cli_file import (
     _build_remote_extract_command,
     _create_upload_archive,
@@ -46,11 +47,18 @@ from agentkit.toolkit.cli.sandbox.session_create import (
     build_model_envs,
     ensure_sandbox_session,
 )
-from agentkit.toolkit.cli.sandbox.tool_resolve import SandboxToolType
+from agentkit.toolkit.cli.sandbox.git_config import apply_git_config_to_session
+from agentkit.toolkit.cli.sandbox.model_config import ModelProviderType
+from agentkit.toolkit.cli.sandbox.tool_resolve import (
+    SandboxToolType,
+    find_tool_model_provider,
+    get_remote_tool_model_provider,
+)
 from agentkit.toolkit.cli.sandbox.utils import (
     add_session_terminal_shell_id,
     build_terminal_ws_url,
     error,
+    find_session_result,
     remove_session_terminal_shell_id,
 )
 
@@ -327,6 +335,48 @@ def _upload_source_before_exec(
     return resolved_dst_dir
 
 
+def _resolve_exec_model_provider(
+    *,
+    session_id: Optional[str],
+    tool_id: Optional[str],
+    tool_type: SandboxToolType,
+    model_name: Optional[str],
+    model_provider: Optional[ModelProviderType],
+) -> str | ModelProviderType | None:
+    if model_provider or not (model_name or "").strip():
+        return model_provider
+
+    resolved_tool_id = (tool_id or "").strip()
+    if not resolved_tool_id and session_id:
+        existing = find_session_result(session_id)
+        if existing:
+            existing_tool_id = existing.get("tool_id")
+            if isinstance(existing_tool_id, str):
+                resolved_tool_id = existing_tool_id.strip()
+
+    if not resolved_tool_id:
+        return None
+
+    cached_model_provider = find_tool_model_provider(
+        tool_id=resolved_tool_id,
+        tool_type=tool_type,
+    )
+    if cached_model_provider:
+        return cached_model_provider
+
+    if not (tool_id or "").strip():
+        return None
+
+    try:
+        return get_remote_tool_model_provider(
+            AgentkitToolsClient(),
+            resolved_tool_id,
+            tool_type=tool_type,
+        )
+    except Exception:
+        return None
+
+
 def exec_command(
     ctx: typer.Context,
     session_id: Optional[str] = typer.Option(
@@ -357,11 +407,6 @@ def exec_command(
             "Omit this option to connect without an initial command."
         ),
     ),
-    shell_id: Optional[str] = typer.Option(
-        None,
-        "--shell-id",
-        help="Existing shell terminal ID to connect to.",
-    ),
     workspace: str = typer.Option(
         DEFAULT_EXEC_WORKSPACE,
         "--workspace",
@@ -385,6 +430,14 @@ def exec_command(
             "to --workspace."
         ),
     ),
+    git_config: Optional[str] = typer.Option(
+        None,
+        "--git-config",
+        help=(
+            "Git identity source. Use 'local' to read local git config, or "
+            "provide an INI/TOML/JSON file path with user.name and user.email."
+        ),
+    ),
     model_name: Optional[str] = typer.Option(
         None,
         "--model-name",
@@ -401,9 +454,24 @@ def exec_command(
             "and ANTHROPIC_AUTH_TOKEN when creating a sandbox session."
         ),
     ),
+    model_provider: Optional[ModelProviderType] = typer.Option(
+        None,
+        "--model-provider",
+        help=(
+            "Model provider to use for base URLs, defaults, and model catalog "
+            "when creating a sandbox session."
+        ),
+    ),
 ) -> None:
     """Open a streaming sandbox exec session. Press Ctrl-] or type exit/exit()."""
     try:
+        resolved_model_provider = _resolve_exec_model_provider(
+            session_id=session_id,
+            tool_id=tool_id,
+            tool_type=tool_type,
+            model_name=model_name,
+            model_provider=model_provider,
+        )
         session = ensure_sandbox_session(
             session_id=session_id,
             tool_id=tool_id,
@@ -411,6 +479,7 @@ def exec_command(
             envs=build_model_envs(
                 model_name=model_name,
                 model_api_key=model_api_key,
+                model_provider=resolved_model_provider,
                 include_codex_config=tool_type == SandboxToolType.CODE_ENV,
             ),
         )
@@ -437,9 +506,6 @@ def exec_command(
     except Exception as exc:
         error(str(exc))
 
-    ws_url = build_terminal_ws_url(session.get("endpoint"), shell_id=shell_id)
-    initial_command = command
-
     cleanup_shell_ids: list[str] = []
     cleanup_shell_ids_lock = threading.Lock()
 
@@ -448,9 +514,18 @@ def exec_command(
             if remote_shell_id not in cleanup_shell_ids:
                 cleanup_shell_ids.append(remote_shell_id)
 
-    if shell_id:
-        add_session_terminal_shell_id(session_id, shell_id)
-        remember_cleanup_shell_id(shell_id)
+    try:
+        apply_git_config_to_session(
+            session,
+            git_config,
+        )
+    except typer.Exit:
+        raise
+    except Exception as exc:
+        error(str(exc))
+
+    ws_url = build_terminal_ws_url(session.get("endpoint"))
+    initial_command = command
 
     def on_shell_id(remote_shell_id: str) -> None:
         add_session_terminal_shell_id(session_id, remote_shell_id)

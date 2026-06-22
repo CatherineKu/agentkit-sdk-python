@@ -674,7 +674,7 @@ def test_ensure_sandbox_session_passes_envs_to_create_session(
     )
     _patch_store_path(monkeypatch, tmp_path)
     envs = session_create.build_model_envs(
-        model_name="claude-sonnet-4",
+        model_name="deepseek-v4-pro-260425",
         **{"model_" + "api_key": "model-value"},
     )
 
@@ -686,9 +686,9 @@ def test_ensure_sandbox_session_passes_envs_to_create_session(
 
     request_envs = _FakeToolsClient.last_request.envs
     assert [(item.key, item.value) for item in request_envs] == [
-        ("OPENCODE_MODEL", "claude-sonnet-4"),
-        ("CODEX_MODEL", "claude-sonnet-4"),
-        ("ANTHROPIC_MODEL", "claude-sonnet-4"),
+        ("OPENCODE_MODEL", "deepseek-v4-pro-260425"),
+        ("CODEX_MODEL", "deepseek-v4-pro-260425"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-pro-260425"),
         ("OPENCODE_API_KEY", "model-value"),
         ("CODEX_API_KEY", "model-value"),
         ("ANTHROPIC_AUTH_TOKEN", "model-value"),
@@ -700,12 +700,12 @@ def test_build_model_envs_uses_model_api_key_env(monkeypatch) -> None:
 
     monkeypatch.setenv("MODEL_API_KEY", "env-model-value")
 
-    envs = session_create.build_model_envs(model_name="claude-sonnet-4")
+    envs = session_create.build_model_envs(model_name="deepseek-v4-pro-260425")
 
     assert [(item.key, item.value) for item in envs] == [
-        ("OPENCODE_MODEL", "claude-sonnet-4"),
-        ("CODEX_MODEL", "claude-sonnet-4"),
-        ("ANTHROPIC_MODEL", "claude-sonnet-4"),
+        ("OPENCODE_MODEL", "deepseek-v4-pro-260425"),
+        ("CODEX_MODEL", "deepseek-v4-pro-260425"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-pro-260425"),
         ("OPENCODE_API_KEY", "env-model-value"),
         ("CODEX_API_KEY", "env-model-value"),
         ("ANTHROPIC_AUTH_TOKEN", "env-model-value"),
@@ -1033,6 +1033,19 @@ def test_sandbox_session_id_options_accept_aliases(args) -> None:
     assert "--session-id" in result.output
     assert "--sid" in result.output
     assert "-s" in result.output
+
+
+@pytest.mark.parametrize(
+    "args",
+    [["sandbox", "shell", "--help"], ["sandbox", "exec", "--help"]],
+)
+def test_sandbox_shell_id_option_is_disabled(args) -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    result = runner.invoke(app, args)
+
+    assert result.exit_code == 0
+    assert "--shell-id" not in result.output
 
 
 def test_sandbox_commands_are_not_registered_at_top_level() -> None:
@@ -1635,6 +1648,7 @@ def test_cli_get_missing_session_includes_resolved_tool_id(
 def test_cli_web_returns_session_browser_url(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.cli_web as cli_web
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     store_path.write_text(
@@ -1651,25 +1665,18 @@ def test_cli_web_returns_session_browser_url(monkeypatch, tmp_path) -> None:
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        cli_web,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
-    _FakeToolsClient.list_sessions_responses = [
-        _FakeListSessionsResponse(
-            [
-                _FakeSessionInfo(
-                    user_session_id="user-1",
-                    session_id="instance-1",
-                    endpoint=(
-                        "https://sandbox.example.com/base?"
-                        "faasInstanceName=vefaas-test-sandbox&"
-                        "Authorization=auth-token&resize=none"
-                    ),
-                )
-            ]
-        )
-    ]
+    _FakeToolsClient.get_response = _FakeGetSessionResponse()
+    _FakeToolsClient.get_response.user_session_id = "user-1"
+    _FakeToolsClient.get_response.session_id = "instance-1"
+    _FakeToolsClient.get_response.endpoint = (
+        "https://sandbox.example.com/base?"
+        "faasInstanceName=vefaas-test-sandbox&"
+        "Authorization=auth-token&resize=none"
+    )
     opened_urls = []
     monkeypatch.setattr(
         cli_web.webbrowser,
@@ -1693,6 +1700,7 @@ def test_cli_web_returns_session_browser_url(monkeypatch, tmp_path) -> None:
         ),
         "tool_id": "tool-1",
         "session_id": "user-1",
+        "is_new": False,
     }
     assert opened_urls == [json.loads(result.output)["url"]]
 
@@ -1703,6 +1711,7 @@ def test_cli_web_uses_stored_tool_id_when_tool_id_omitted(
 ) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.cli_web as cli_web
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     store_path = _patch_store_path(monkeypatch, tmp_path)
     store_path.write_text(
@@ -1719,21 +1728,14 @@ def test_cli_web_uses_stored_tool_id_when_tool_id_omitted(
         encoding="utf-8",
     )
     monkeypatch.setattr(
-        cli_web,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
-    _FakeToolsClient.list_sessions_responses = [
-        _FakeListSessionsResponse(
-            [
-                _FakeSessionInfo(
-                    user_session_id="user-1",
-                    session_id="instance-1",
-                    endpoint="https://sandbox.example.com",
-                )
-            ]
-        )
-    ]
+    _FakeToolsClient.get_response = _FakeGetSessionResponse()
+    _FakeToolsClient.get_response.user_session_id = "user-1"
+    _FakeToolsClient.get_response.session_id = "instance-1"
+    _FakeToolsClient.get_response.endpoint = "https://sandbox.example.com"
     opened_urls = []
     monkeypatch.setattr(
         cli_web.webbrowser,
@@ -1744,7 +1746,7 @@ def test_cli_web_uses_stored_tool_id_when_tool_id_omitted(
     result = runner.invoke(app, ["sandbox", "web", "--session-id", "user-1"])
 
     assert result.exit_code == 0
-    assert _FakeToolsClient.last_list_sessions_request.tool_id == "tool-stored"
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-stored"
     assert json.loads(result.output) == {
         "url": (
             "https://sandbox.example.com/vnc/index.html?"
@@ -1752,6 +1754,7 @@ def test_cli_web_uses_stored_tool_id_when_tool_id_omitted(
         ),
         "tool_id": "tool-stored",
         "session_id": "user-1",
+        "is_new": False,
     }
     assert opened_urls == [json.loads(result.output)["url"]]
 
@@ -1762,10 +1765,11 @@ def test_cli_web_accepts_tool_id_underscore_alias(
 ) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.cli_web as cli_web
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     _patch_store_path(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        cli_web,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
@@ -1790,15 +1794,60 @@ def test_cli_web_accepts_tool_id_underscore_alias(
     assert result.exit_code == 0
     assert _FakeToolsClient.last_list_sessions_request.tool_id == "tool-1"
     assert json.loads(result.output)["tool_id"] == "tool-1"
+    assert json.loads(result.output)["is_new"] is False
+
+
+def test_cli_web_creates_missing_session_with_requested_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_web as cli_web
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    _patch_store_path(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _FakeToolsClient.list_sessions_responses = [_FakeListSessionsResponse([])]
+
+    class CreatedResponse:
+        user_session_id = "user-1"
+        session_id = "instance-new"
+        endpoint = "https://sandbox.example.com"
+
+    _FakeToolsClient.response = CreatedResponse()
+    monkeypatch.setattr(cli_web.webbrowser, "open", lambda _url: True)
+
+    result = runner.invoke(
+        app,
+        ["sandbox", "web", "--session-id", "user-1", "--tool-id", "tool-1"],
+    )
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.last_request.user_session_id == "user-1"
+    assert json.loads(result.output) == {
+        "url": (
+            "https://sandbox.example.com/vnc/index.html?"
+            "autoconnect=true&resize=scale&reconnect=1"
+        ),
+        "tool_id": "tool-1",
+        "session_id": "user-1",
+        "is_new": True,
+    }
 
 
 def test_cli_web_opens_default_browser(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.cli_web as cli_web
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     _patch_store_path(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        cli_web,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
@@ -1842,16 +1891,18 @@ def test_cli_web_opens_default_browser(monkeypatch, tmp_path) -> None:
         "url": expected_url,
         "tool_id": "tool-1",
         "session_id": "user-1",
+        "is_new": False,
     }
 
 
 def test_cli_web_open_reports_browser_failure(monkeypatch, tmp_path) -> None:
     from agentkit.toolkit.cli.cli import app
     import agentkit.toolkit.cli.sandbox.cli_web as cli_web
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
 
     _patch_store_path(monkeypatch, tmp_path)
     monkeypatch.setattr(
-        cli_web,
+        session_create,
         "AgentkitToolsClient",
         lambda: _FakeToolsClient(),
     )
@@ -1957,8 +2008,6 @@ def test_cli_shell_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
             "echo 123",
             "--exec-dir",
             "/workspace",
-            "--shell-id",
-            "shell-1",
         ],
     )
 
@@ -1966,7 +2015,7 @@ def test_cli_shell_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
     assert captured_session["tool_type"] == "SkillEnv"
     assert captured["url"] == "https://sandbox.example.com/v1/shell/exec?token=abc"
     assert captured["json"] == {
-        "id": "shell-1",
+        "id": "",
         "exec_dir": "/workspace",
         "command": "echo 123",
     }
@@ -1974,6 +2023,28 @@ def test_cli_shell_posts_to_session_endpoint(monkeypatch, tmp_path) -> None:
     payload = json.loads(result.output)
     assert payload["data"]["shell_id"] == "shell-1"
     assert "session_id" not in payload["data"]
+
+
+def test_cli_shell_rejects_shell_id_option() -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--command",
+            "echo 123",
+            "--shell-id",
+            "shell-1",
+        ],
+    )
+
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+    assert "--shell-id" in result.output
 
 
 def test_cli_shell_uploads_sources_before_command(monkeypatch, tmp_path) -> None:
@@ -2066,6 +2137,195 @@ def test_cli_shell_uploads_sources_before_command(monkeypatch, tmp_path) -> None
     ]
     payload = json.loads(result.output)
     assert payload["data"]["shell_id"] == "shell-1"
+
+
+def test_cli_shell_git_config_file_does_not_reuse_shell_exec_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    config_path = tmp_path / "git.json"
+    config_path.write_text(
+        json.dumps({"user": {"name": "Ada Lovelace", "email": "ada@example.com"}}),
+        encoding="utf-8",
+    )
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
+    events = []
+
+    def fake_exec_shell_command(session, command, *, shell_id="", **_kwargs):
+        events.append(("git-config", session, command, shell_id))
+        return {"data": {"session_id": "shell-from-git", "exit_code": 0}}
+
+    class FakeResponse:
+        text = '{"success": true}'
+
+        def json(self):
+            return {
+                "success": True,
+                "data": {
+                    "session_id": "shell-from-git",
+                    "status": "completed",
+                    "output": "done",
+                    "exit_code": 0,
+                },
+            }
+
+    def fake_post(url, json, timeout):
+        events.append(("post", url, json, timeout))
+        return FakeResponse()
+
+    monkeypatch.setattr(git_config, "_exec_shell_command", fake_exec_shell_command)
+    monkeypatch.setattr(cli_shell.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--git-config",
+            str(config_path),
+            "--command",
+            "git status",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert events == [
+        (
+            "git-config",
+            stored_session,
+            "git config --global user.name 'Ada Lovelace'; "
+            "git config --global user.email ada@example.com",
+            "",
+        ),
+        (
+            "post",
+            "https://sandbox.example.com/v1/shell/exec",
+            {"id": "", "exec_dir": "", "command": "git status"},
+            cli_shell.SANDBOX_EXEC_TIMEOUT_SECONDS,
+        ),
+    ]
+    payload = json.loads(result.output)
+    assert payload["data"]["shell_id"] == "shell-from-git"
+
+
+def test_cli_shell_git_config_missing_file_errors(monkeypatch, tmp_path) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_shell as cli_shell
+
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com",
+    }
+    _patch_shell_session(monkeypatch, cli_shell, stored_session)
+    posted = {"value": False}
+    monkeypatch.setattr(
+        cli_shell.requests,
+        "post",
+        lambda *_args, **_kwargs: posted.update(value=True),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "shell",
+            "--session-id",
+            "user-1",
+            "--git-config",
+            str(tmp_path / "missing.ini"),
+            "--command",
+            "git status",
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert "Git config file not found" in result.output
+    assert posted["value"] is False
+
+
+def test_resolve_git_config_local_reads_git_values(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    calls = []
+
+    class FakeCompletedProcess:
+        def __init__(self, stdout="", stderr="", returncode=0):
+            self.stdout = stdout
+            self.stderr = stderr
+            self.returncode = returncode
+
+    def fake_run(args, **_kwargs):
+        calls.append(args)
+        if args == ["git", "config", "--list"]:
+            return FakeCompletedProcess(
+                stdout="user.name=Ada Lovelace\nuser.email=ada@example.com\n"
+            )
+        if args == ["git", "config", "--get", "user.name"]:
+            return FakeCompletedProcess(stdout="Ada Lovelace\n")
+        if args == ["git", "config", "--get", "user.email"]:
+            return FakeCompletedProcess(stdout="ada@example.com\n")
+        raise AssertionError(args)
+
+    monkeypatch.setattr(git_config.shutil, "which", lambda _name: "/usr/bin/git")
+    monkeypatch.setattr(git_config.subprocess, "run", fake_run)
+
+    assert git_config.resolve_git_config("local") == (
+        "Ada Lovelace",
+        "ada@example.com",
+    )
+    assert calls == [
+        ["git", "config", "--list"],
+        ["git", "config", "--get", "user.name"],
+        ["git", "config", "--get", "user.email"],
+    ]
+
+
+def test_resolve_git_config_local_rejects_empty_git_config(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    class FakeCompletedProcess:
+        stdout = ""
+        stderr = ""
+        returncode = 0
+
+    monkeypatch.setattr(git_config.shutil, "which", lambda _name: "/usr/bin/git")
+    monkeypatch.setattr(
+        git_config.subprocess,
+        "run",
+        lambda *_args, **_kwargs: FakeCompletedProcess(),
+    )
+
+    with pytest.raises(ValueError, match="Local git config is empty"):
+        git_config.resolve_git_config("local")
+
+
+def test_resolve_git_config_ini_supports_flat_user_keys(tmp_path) -> None:
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    config_path = tmp_path / "gitconfig"
+    config_path.write_text(
+        "user.name = Ada Lovelace\nuser.email = ada@example.com\n",
+        encoding="utf-8",
+    )
+
+    assert git_config.resolve_git_config(str(config_path)) == (
+        "Ada Lovelace",
+        "ada@example.com",
+    )
 
 
 def test_cli_shell_rejects_extra_source_without_src_dir(
@@ -2262,6 +2522,73 @@ def test_cli_exec_runs_command_option(monkeypatch, tmp_path) -> None:
     assert result.exit_code == 0
     assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws?token=abc"
     assert captured["initial_command"] == "codex"
+
+
+def test_cli_exec_git_config_file_does_not_reuse_shell_exec_id_for_ws(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+    import agentkit.toolkit.cli.sandbox.git_config as git_config
+
+    config_path = tmp_path / "git.toml"
+    config_path.write_text(
+        '[user]\nname = "Ada Lovelace"\nemail = "ada@example.com"\n',
+        encoding="utf-8",
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
+    captured = {}
+
+    def fake_exec_shell_command(session, command, *, shell_id="", **_kwargs):
+        captured["git_config"] = (session, command, shell_id)
+        return {"data": {"session_id": "shell-from-git", "exit_code": 0}}
+
+    def fake_connect(ws_url, initial_command, on_shell_id=None):
+        captured["ws_url"] = ws_url
+        captured["initial_command"] = initial_command
+        captured["on_shell_id"] = on_shell_id
+
+    monkeypatch.setattr(git_config, "_exec_shell_command", fake_exec_shell_command)
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--git-config",
+            str(config_path),
+            "--command",
+            "codex",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["git_config"] == (
+        stored_session,
+        "git config --global user.name 'Ada Lovelace'; "
+        "git config --global user.email ada@example.com",
+        "",
+    )
+    assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws?token=abc"
+    assert captured["initial_command"] == "codex"
+    assert captured["on_shell_id"] is not None
+    stored = json.loads(store_path.read_text(encoding="utf-8"))
+    assert "terminal_shell_id" not in stored["user-1"]
 
 
 def test_cli_exec_uploads_directory_before_connecting(
@@ -2635,8 +2962,10 @@ def test_cli_exec_passes_model_options_to_session_create(
             "user-1",
             "--tool-type",
             "SkillEnv",
+            "--model-provider",
+            "coding_plan",
             "--model-name",
-            "claude-sonnet-4",
+            "glm-5.2",
             "--model-api-key",
             "model-value",
         ],
@@ -2646,16 +2975,21 @@ def test_cli_exec_passes_model_options_to_session_create(
     assert captured_session["session_id"] == "user-1"
     assert captured_session["tool_type"] == "SkillEnv"
     assert [(item.key, item.value) for item in captured_session["envs"]] == [
-        ("OPENCODE_MODEL", "claude-sonnet-4"),
-        ("CODEX_MODEL", "claude-sonnet-4"),
-        ("ANTHROPIC_MODEL", "claude-sonnet-4"),
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "coding_plan"),
+        ("OPENCODE_MODEL", "glm-5.2"),
+        ("CODEX_MODEL", "glm-5.2"),
+        ("ANTHROPIC_MODEL", "glm-5.2"),
+        ("OPENCODE_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"),
+        ("CODEX_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"),
+        ("MODEL_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"),
+        ("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding"),
         ("OPENCODE_API_KEY", "model-value"),
         ("CODEX_API_KEY", "model-value"),
         ("ANTHROPIC_AUTH_TOKEN", "model-value"),
     ]
 
 
-def test_cli_exec_syncs_codex_config_for_code_env_model_name(
+def test_cli_exec_model_name_without_provider_syncs_codex_config(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -2695,7 +3029,7 @@ def test_cli_exec_syncs_codex_config_for_code_env_model_name(
             "--session-id",
             "user-1",
             "--model-name",
-            "claude-sonnet-4",
+            "glm-5.2",
         ],
     )
 
@@ -2708,12 +3042,164 @@ def test_cli_exec_syncs_codex_config_for_code_env_model_name(
         "CODEX_CONFIG_TOML",
         "CODEX_MODEL_CATALOG_JSON",
     ]
-    config_toml = envs["CODEX_CONFIG_TOML"]
-    assert 'model = "claude-sonnet-4"' in config_toml
-    assert 'review_model = "claude-sonnet-4"' in config_toml
-    assert 'model = "deepseek-v4-flash-260425"' not in config_toml
+    assert envs["OPENCODE_MODEL"] == "glm-5.2"
+    assert envs["CODEX_MODEL"] == "glm-5.2"
+    assert envs["ANTHROPIC_MODEL"] == "glm-5.2"
+    assert 'model_provider = "model_square"' in envs["CODEX_CONFIG_TOML"]
+    assert '[model_providers.model_square]' in envs["CODEX_CONFIG_TOML"]
     catalog = json.loads(envs["CODEX_MODEL_CATALOG_JSON"])
-    assert catalog["models"][0]["slug"] == "claude-sonnet-4"
+    assert catalog["models"][0]["slug"] == "glm-5.2"
+
+
+def test_cli_exec_model_name_uses_cached_tool_model_provider(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    tool_store_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_store_path.write_text(
+        json.dumps(
+            {
+                "CodeEnv": {
+                    "ToolId": "tool-1",
+                    "ToolType": "CodeEnv",
+                    "Name": "agent-plan-tool",
+                    "Status": "Ready",
+                    "ModelProvider": "agent_plan",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    captured_session = {}
+    _patch_exec_session(
+        monkeypatch,
+        cli_exec,
+        stored_session,
+        capture=captured_session,
+    )
+    monkeypatch.setattr(
+        cli_exec,
+        "_connect_terminal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--tool-id",
+            "tool-1",
+            "--session-id",
+            "user-1",
+            "--model-name",
+            "glm-5.2",
+        ],
+    )
+
+    assert result.exit_code == 0
+    envs = {item.key: item.value for item in captured_session["envs"]}
+    assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "agent_plan"
+    assert envs["CODEX_MODEL"] == "glm-5.2"
+    assert envs["CODEX_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/plan/v3"
+    )
+    assert (
+        'model_provider = "agent_plan"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+
+
+def test_cli_exec_model_provider_sets_default_model_and_codex_config(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    captured_session = {}
+    _patch_exec_session(
+        monkeypatch,
+        cli_exec,
+        stored_session,
+        capture=captured_session,
+    )
+    monkeypatch.setattr(
+        cli_exec,
+        "_connect_terminal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--model-provider",
+            "agent_plan",
+        ],
+    )
+
+    assert result.exit_code == 0
+    envs = {item.key: item.value for item in captured_session["envs"]}
+    assert envs["OPENCODE_MODEL"] == "deepseek-v4-flash"
+    assert envs["CODEX_MODEL"] == "deepseek-v4-flash"
+    assert envs["ANTHROPIC_MODEL"] == "deepseek-v4-flash"
+    assert envs["OPENCODE_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/plan/v3"
+    )
+    assert envs["ANTHROPIC_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/plan"
+    )
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+    catalog = json.loads(envs["CODEX_MODEL_CATALOG_JSON"])
+    models = {model["slug"]: model for model in catalog["models"]}
+    assert "deepseek-v4-flash" in models
+    assert "deepseek-v4-flash-260425" not in models
+    assert models["glm-5.2"]["supports_reasoning_summaries"] is False
+    glm_reasoning_levels = models["glm-5.2"]["supported_reasoning_levels"]
+    assert [level["effort"] for level in glm_reasoning_levels] == [
+        "low",
+        "medium",
+        "high",
+    ]
 
 
 def test_cli_exec_rejects_model_base_url_option() -> None:
@@ -2733,7 +3219,7 @@ def test_cli_exec_rejects_model_base_url_option() -> None:
     assert "No such option" in result.output
 
 
-def test_cli_exec_supports_shell_id_and_empty_command(
+def test_cli_exec_supports_empty_command(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -2767,8 +3253,6 @@ def test_cli_exec_supports_shell_id_and_empty_command(
             "exec",
             "--session-id",
             "user-1",
-            "--shell-id",
-            "shell-1",
             "--command",
             "",
         ],
@@ -2777,37 +3261,13 @@ def test_cli_exec_supports_shell_id_and_empty_command(
     assert result.exit_code == 0
     assert (
         captured["ws_url"]
-        == "ws://sandbox.example.com/base/v1/shell/ws?token=abc&session_id=shell-1"
+        == "ws://sandbox.example.com/base/v1/shell/ws?token=abc"
     )
     assert captured["initial_command"] == ""
 
 
-def test_cli_exec_does_not_restart_codex_for_shell_id(
-    monkeypatch,
-    tmp_path,
-) -> None:
+def test_cli_exec_rejects_shell_id_option() -> None:
     from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
-
-    store_path = _patch_store_path(monkeypatch, tmp_path)
-    stored_session = {
-        "session_id": "user-1",
-        "tool_id": "tool-1",
-        "instance_id": "session-1",
-        "endpoint": "https://sandbox.example.com/?token=abc",
-    }
-    store_path.write_text(
-        json.dumps({"user-1": stored_session}),
-        encoding="utf-8",
-    )
-    _patch_exec_session(monkeypatch, cli_exec, stored_session)
-    captured = {}
-
-    def fake_connect(ws_url, initial_command, on_shell_id=None):
-        captured["ws_url"] = ws_url
-        captured["initial_command"] = initial_command
-
-    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
 
     result = runner.invoke(
         app,
@@ -2821,8 +3281,9 @@ def test_cli_exec_does_not_restart_codex_for_shell_id(
         ],
     )
 
-    assert result.exit_code == 0
-    assert captured["initial_command"] is None
+    assert result.exit_code != 0
+    assert "No such option" in result.output
+    assert "--shell-id" in result.output
 
 
 def test_cli_exec_clears_remote_shell_id_on_disconnect(
@@ -2901,51 +3362,6 @@ def test_cli_exec_does_not_clear_newer_shell_id(
     assert result.exit_code == 0
     stored = json.loads(store_path.read_text(encoding="utf-8"))
     assert stored["user-1"]["terminal_shell_id"] == ["shell-from-newer-terminal"]
-
-
-def test_cli_exec_clears_shell_id_option_on_disconnect(
-    monkeypatch,
-    tmp_path,
-) -> None:
-    from agentkit.toolkit.cli.cli import app
-    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
-
-    store_path = _patch_store_path(monkeypatch, tmp_path)
-    stored_session = {
-        "session_id": "user-1",
-        "tool_id": "tool-1",
-        "instance_id": "session-1",
-        "endpoint": "https://sandbox.example.com/?token=abc",
-        "terminal_shell_id": ["shell-from-cli"],
-    }
-    store_path.write_text(
-        json.dumps({"user-1": stored_session}, indent=2),
-        encoding="utf-8",
-    )
-    _patch_exec_session(monkeypatch, cli_exec, stored_session)
-
-    def fake_connect(_ws_url, initial_command=None, on_shell_id=None):
-        assert on_shell_id is not None
-        stored = json.loads(store_path.read_text(encoding="utf-8"))
-        assert stored["user-1"]["terminal_shell_id"] == ["shell-from-cli"]
-
-    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
-
-    result = runner.invoke(
-        app,
-        [
-            "sandbox",
-            "exec",
-            "--session-id",
-            "user-1",
-            "--shell-id",
-            "shell-from-cli",
-        ],
-    )
-
-    assert result.exit_code == 0
-    stored = json.loads(store_path.read_text(encoding="utf-8"))
-    assert "terminal_shell_id" not in stored["user-1"]
 
 
 def test_cli_exec_keeps_stored_shell_ids_without_current_shell_id(
