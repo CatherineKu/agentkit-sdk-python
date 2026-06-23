@@ -222,8 +222,13 @@ def _apply_registry_config(
         section = {}
 
     if registry is not None:
-        section.update(_parse_registry_uri(registry))
+        parsed_registry = _parse_registry_uri(registry)
+        if parsed_registry.get("space_name") and "space_id" not in parsed_registry:
+            section.pop("space_id", None)
+        section.update(parsed_registry)
 
+    if registry_space_name is not None:
+        section.pop("space_id", None)
     _set_registry_value(section, "space_id", registry_space_id)
     _set_registry_value(section, "space_name", registry_space_name)
     _set_registry_value(section, "top_k", registry_top_k)

@@ -346,6 +346,60 @@ def test_registry_default_resolves_default_space(tmp_path, monkeypatch):
     }
 
 
+def test_registry_default_overrides_existing_space_id(tmp_path, monkeypatch):
+    (tmp_path / "h.harness.json").write_text(
+        json.dumps(
+            {
+                "harness_name": "h",
+                "runtime": "adk",
+                "short_term_memory": {"type": "local"},
+                "registry": {
+                    "type": "agentkit_a2a",
+                    "space_id": "as-old",
+                    "endpoint": "https://open.volcengineapi.com/",
+                    "region": "cn-beijing",
+                },
+            }
+        )
+    )
+    captured = {}
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        captured.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "as-default"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run(
+        [
+            "harness",
+            "--name",
+            "h",
+            "--registry",
+            "default",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads((tmp_path / "h.harness.json").read_text())
+    assert data["registry"] == {
+        "type": "agentkit_a2a",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+        "space_id": "as-default",
+    }
+    assert captured == {
+        "space_name": "Default",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
 def test_resolve_a2a_space_id_by_name_paginates_all_spaces(monkeypatch):
     calls = []
 
