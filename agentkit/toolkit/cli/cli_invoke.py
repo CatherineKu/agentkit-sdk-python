@@ -662,6 +662,7 @@ def _parse_harness_registry_override(value: Optional[str]) -> dict[str, Any]:
     """Parse ``--registry`` into one-time harness registry overrides.
 
     Supported forms:
+    - default (Default space in cn-beijing via https://open.volcengineapi.com/)
     - agentkit://a2a-registry?space_id=xxx&top_k=3&region=cn-beijing
     - https://... (treated as registry_endpoint; recognized query params are
       also extracted when present)
@@ -673,6 +674,9 @@ def _parse_harness_registry_override(value: Optional[str]) -> dict[str, Any]:
     if not raw:
         return {}
 
+    from agentkit.toolkit.cli.cli_add import _expand_default_registry_uri
+
+    raw = _expand_default_registry_uri(raw)
     parsed = urlparse(raw)
     overrides: dict[str, Any] = {}
 
@@ -686,14 +690,16 @@ def _parse_harness_registry_override(value: Optional[str]) -> dict[str, Any]:
         if parsed.netloc != "a2a-registry" or parsed.path not in {"", "/"}:
             raise ValueError(
                 "Unsupported registry URI. Use "
-                '`agentkit://a2a-registry?space_id=xxx&top_k=3` or an http(s) URL.'
+                '`default`, `agentkit://a2a-registry?space_id=xxx&top_k=3`, '
+                "or an http(s) URL."
             )
     elif parsed.scheme in {"http", "https"}:
         overrides["registry_endpoint"] = raw
     else:
         raise ValueError(
             "Unsupported registry value. Use "
-            '`agentkit://a2a-registry?space_id=xxx&top_k=3` or an http(s) URL.'
+            '`default`, `agentkit://a2a-registry?space_id=xxx&top_k=3`, '
+            "or an http(s) URL."
         )
 
     unknown = sorted(set(query) - set(_INVOKE_REGISTRY_QUERY_ALIASES))
@@ -998,7 +1004,8 @@ def harness_command(
         "--registry",
         help=(
             "Override A2A registry for this invocation. Accepts "
-            "`agentkit://a2a-registry?space_id=xxx&top_k=3` or an http(s) URL."
+            "`default`, `agentkit://a2a-registry?space_id=xxx&top_k=3`, "
+            "or an http(s) URL."
         ),
     ),
     registry_top_k: int = typer.Option(

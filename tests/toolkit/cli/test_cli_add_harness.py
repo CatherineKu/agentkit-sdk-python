@@ -29,6 +29,10 @@ def _run(args):
     return runner.invoke(app, ["add", *args])
 
 
+def _squash_output(value: str) -> str:
+    return " ".join(value.split())
+
+
 def test_creates_harness_json_with_layered_structure(tmp_path):
     result = _run(
         [
@@ -247,6 +251,45 @@ def test_registry_uri_space_name_uses_uri_endpoint_and_region(tmp_path, monkeypa
     }
 
 
+def test_registry_default_resolves_default_space(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        captured.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "space-default"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run(
+        [
+            "harness",
+            "--name",
+            "h",
+            "--registry",
+            "default",
+            "--directory",
+            str(tmp_path),
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    data = json.loads((tmp_path / "h.harness.json").read_text())
+    assert data["registry"] == {
+        "type": "agentkit_a2a",
+        "space_id": "space-default",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+    assert captured == {
+        "space_name": "Default",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
 def test_resolve_a2a_space_id_by_name_paginates_all_spaces(monkeypatch):
     calls = []
 
@@ -296,7 +339,7 @@ def test_resolve_a2a_space_id_by_name_paginates_all_spaces(monkeypatch):
     ]
 
 
-def test_registry_disabled_turns_off_registry(tmp_path):
+def test_registry_disabled_is_pruned_from_harness_spec(tmp_path):
     result = _run(
         [
             "harness",
@@ -311,7 +354,7 @@ def test_registry_disabled_turns_off_registry(tmp_path):
 
     assert result.exit_code == 0, result.output
     data = json.loads((tmp_path / "h.harness.json").read_text())
-    assert data["registry"] == {"type": ""}
+    assert "registry" not in data
 
 
 def test_registry_off_is_not_supported(tmp_path):
@@ -328,7 +371,7 @@ def test_registry_off_is_not_supported(tmp_path):
     )
 
     assert result.exit_code == 1
-    assert "`disabled` is supported" in result.output
+    assert "`default` / `disabled` is supported" in _squash_output(result.output)
 
 
 def test_registry_config_maps_to_runtime_env():
@@ -479,7 +522,7 @@ def test_add_harness_register_self_requires_harness_json_entry(tmp_path):
     )
 
     assert result.exit_code == 1
-    assert "does not contain an entry for 'h'" in result.output
+    assert "does not contain an entry for 'h'" in _squash_output(result.output)
 
 
 def test_add_harness_register_self_requires_url_and_runtime_id(tmp_path):
@@ -499,7 +542,7 @@ def test_add_harness_register_self_requires_url_and_runtime_id(tmp_path):
     )
 
     assert result.exit_code == 1
-    assert "missing required field(s): runtime_id" in result.output
+    assert "missing required field(s): runtime_id" in _squash_output(result.output)
 
 
 def test_add_harness_register_self_rejects_invalid_network_type(tmp_path):

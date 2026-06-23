@@ -177,7 +177,7 @@ def test_harness_invoke_posts_registry_overrides(tmp_path, monkeypatch):
     captured = {}
     _patch_post(monkeypatch, captured)
 
-    result = _run_harness(
+    result = _run_invoke(
         [
             "first",
             "Find a finance expert.",
@@ -314,6 +314,48 @@ def test_harness_invoke_registry_uri_space_name_resolves_to_space_id(tmp_path, m
     }
     assert resolved == {
         "space_name": "space-name",
+        "endpoint": "https://open.volcengineapi.com/",
+        "region": "cn-beijing",
+    }
+
+
+def test_harness_invoke_registry_default_resolves_default_space(tmp_path, monkeypatch):
+    _write_registry(
+        tmp_path,
+        {"first": {"url": "https://x", "key": "ak", "runtime_id": "r-1"}},
+    )
+    captured = {}
+    resolved = {}
+    _patch_post(monkeypatch, captured)
+
+    def fake_resolve_space_name(space_name, *, endpoint, region):
+        resolved.update({"space_name": space_name, "endpoint": endpoint, "region": region})
+        return "space-default"
+
+    monkeypatch.setattr(
+        "agentkit.toolkit.cli.cli_add._resolve_a2a_space_id_by_name",
+        fake_resolve_space_name,
+    )
+
+    result = _run_invoke(
+        [
+            "first",
+            "Find a finance expert.",
+            "--directory",
+            str(tmp_path),
+            "--registry",
+            "default",
+        ]
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["harness"] == {
+        "registry_space_id": "space-default",
+        "registry_endpoint": "https://open.volcengineapi.com/",
+        "registry_region": "cn-beijing",
+    }
+    assert resolved == {
+        "space_name": "Default",
         "endpoint": "https://open.volcengineapi.com/",
         "region": "cn-beijing",
     }

@@ -74,6 +74,10 @@ _REGISTRY_QUERY_KEYS = {
 _REGISTRY_INT_KEYS = {"top_k"}
 _REGISTER_NETWORK_TYPES = {"public", "private"}
 _REGISTER_DEFAULT_VERSION = "2025-10-30"
+_DEFAULT_A2A_REGISTRY_URI = (
+    "agentkit://a2a-registry?"
+    "space_name=Default&region=cn-beijing&endpoint=https://open.volcengineapi.com/"
+)
 
 
 class _A2ARegisterError(Exception):
@@ -142,9 +146,16 @@ def _parse_registry_int(key: str, value: object) -> object:
         raise ValueError(f"Registry param `{key}` must be an integer, got {value!r}.") from exc
 
 
+def _expand_default_registry_uri(value: str) -> str:
+    raw = value.strip()
+    if raw.lower() == "default":
+        return _DEFAULT_A2A_REGISTRY_URI
+    return raw
+
+
 def _parse_registry_uri(value: str) -> dict:
     """Parse the supported AgentKit A2A registry URI into a spec section."""
-    raw = value.strip()
+    raw = _expand_default_registry_uri(value)
     if raw.lower() == "disabled":
         return {"type": ""}
 
@@ -157,7 +168,7 @@ def _parse_registry_uri(value: str) -> dict:
         raise ValueError(
             "Unsupported registry URI. Currently only "
             "`agentkit://a2a-registry?space_id=xxx&top_k=3` or "
-            "`disabled` is supported."
+            "`default` / `disabled` is supported."
         )
 
     query = {
@@ -612,7 +623,10 @@ def harness_command(
     registry: Optional[str] = typer.Option(
         None,
         "--registry",
-        help='AgentKit A2A registry URI, e.g. "agentkit://a2a-registry?space_id=xxx&top_k=3".',
+        help=(
+            'AgentKit A2A registry URI, "default", or "disabled", e.g. '
+            '"agentkit://a2a-registry?space_id=xxx&top_k=3".'
+        ),
     ),
     registry_space_id: Optional[str] = typer.Option(
         None, "--registry-space-id", help="AgentKit A2A SpaceId."
