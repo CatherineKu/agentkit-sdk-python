@@ -58,7 +58,7 @@ Options:
 - `--tos-bucket`: optional. TOS bucket to mount. If omitted, the tool is
   created without TOS mount configuration.
 - `--tos-mount`: optional. Local mount path for `--tos-bucket`; defaults to
-  `/home/gem`.
+  `/home/gem/workspace`.
 - `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
   `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
 - `--model-provider`: optional. Model provider to use for base URLs, the
@@ -104,11 +104,12 @@ Volcengine configuration, including environment variables and global
 `agentkit config --global` settings.
 
 When `--tos-bucket` is set, the generated tool TOS mount uses
-`LocalMountPath: /home/gem` by default, or the path provided by `--tos-mount`:
+`LocalMountPath: /home/gem/workspace` by default, or the path provided by
+`--tos-mount`:
 
 ```text
 BucketPath: /sandbox-session/default/default
-LocalMountPath: /home/gem
+LocalMountPath: /home/gem/workspace
 Endpoint: http://tos-<region>.ivolces.com
 ```
 

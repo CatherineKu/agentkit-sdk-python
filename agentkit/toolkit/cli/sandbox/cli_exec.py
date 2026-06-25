@@ -50,7 +50,7 @@ from agentkit.toolkit.cli.sandbox.session_create import (
 )
 from agentkit.toolkit.cli.sandbox.git_config import apply_git_config_to_session
 from agentkit.toolkit.cli.sandbox.model_config import ModelProviderType
-from agentkit.toolkit.cli.sandbox.tos_config import DEFAULT_TOS_LOCAL_PATH
+from agentkit.toolkit.cli.sandbox.tos_config import DEFAULT_SANDBOX_WORKSPACE
 from agentkit.toolkit.cli.sandbox.tool_resolve import (
     SandboxToolType,
     find_tool_model_provider,
@@ -167,8 +167,7 @@ def _connect_terminal(
         import websocket
     except ImportError:
         error(
-            "websocket-client is required. "
-            "Install with: pip install websocket-client"
+            "websocket-client is required. Install with: pip install websocket-client"
         )
 
     stop_event = threading.Event()
@@ -259,7 +258,7 @@ def _resolve_exec_dst_dir(
     workspace: Optional[str],
     dst_dir: Optional[str],
 ) -> str:
-    resolved_workspace = _normalize_workspace(workspace) or DEFAULT_TOS_LOCAL_PATH
+    resolved_workspace = _normalize_workspace(workspace) or DEFAULT_SANDBOX_WORKSPACE
     raw_dst_dir = (dst_dir or "").strip()
     if not raw_dst_dir:
         return resolved_workspace
@@ -447,7 +446,7 @@ def exec_command(
         ),
     ),
     workspace: str = typer.Option(
-        DEFAULT_TOS_LOCAL_PATH,
+        DEFAULT_SANDBOX_WORKSPACE,
         "--workspace",
         help=(
             "Sandbox workspace root. Relative --dst-dir values are "
@@ -457,9 +456,7 @@ def exec_command(
     src_dir: Optional[Path] = typer.Option(
         None,
         "--src-dir",
-        help=(
-            "Local file or directory to upload before opening the exec session."
-        ),
+        help=("Local file or directory to upload before opening the exec session."),
     ),
     dst_dir: Optional[str] = typer.Option(
         None,

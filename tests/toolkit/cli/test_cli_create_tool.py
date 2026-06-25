@@ -308,13 +308,11 @@ def test_create_command_uses_tos_service_when_bucket_is_set(monkeypatch):
     assert len(_FakeTOSService.instances) == 1
     assert _FakeTOSService.instances[0].config.bucket == "my-bucket"
     assert _FakeTOSService.instances[0].config.region == "cn-beijing"
+    assert _FakeTOSService.instances[0].local_mount_path == "/home/gem/workspace"
     tos_config = _FakeToolsClient.last_request.tos_mount_config
     assert tos_config is not None
     assert tos_config.mount_points[0].bucket_name == "my-bucket"
-    assert (
-        tos_config.mount_points[0].bucket_path
-        == "/sandbox-session/default/default"
-    )
+    assert tos_config.mount_points[0].bucket_path == "/sandbox-session/default/default"
 
 
 def test_create_command_uses_tos_mount_option(monkeypatch):
@@ -450,6 +448,7 @@ def test_create_command_help_omits_model_base_url_option():
 
     assert result.exit_code == 0
     assert "--tos-mount" in result.output
+    assert "/home/gem/workspace" in result.output
     assert "--model-provider" in result.output
     assert "--model-base-url" not in result.output
 
@@ -518,7 +517,7 @@ def test_build_create_tool_request_adds_tos_mount(monkeypatch):
     assert mount_point.bucket_name == "my-bucket"
     assert mount_point.bucket_path == "/sandbox-session/default/default"
     assert mount_point.endpoint == "http://tos-cn-beijing.ivolces.com"
-    assert mount_point.local_mount_path == "/home/gem"
+    assert mount_point.local_mount_path == "/home/gem/workspace"
     assert mount_point.read_only is False
     assert fake_service.created_directories == [
         "sandbox-session/",
@@ -651,10 +650,7 @@ def test_build_create_tool_request_adds_code_env_config_envs(monkeypatch):
     assert 'model = "deepseek-v4-pro-260425"' in config_toml
     assert 'review_model = "deepseek-v4-pro-260425"' in config_toml
     assert 'model = "deepseek-v4-flash-260425"' not in config_toml
-    assert (
-        'model_catalog_json = "/home/gem/.codex/model-catalog.json"'
-        in config_toml
-    )
+    assert 'model_catalog_json = "/home/gem/.codex/model-catalog.json"' in config_toml
     assert "model_availability_nux" not in config_toml
     assert "gpt-5.5" not in config_toml
     assert 'web_search = "disabled"' in config_toml
@@ -687,10 +683,7 @@ def test_build_create_tool_request_adds_code_env_config_envs(monkeypatch):
     assert "deepseek-v4-flash-260425" in [model["slug"] for model in models]
     models_by_slug = {model["slug"]: model for model in models}
     assert "doubao-seed-2-0-pro-260215" in models_by_slug
-    assert (
-        models_by_slug["doubao-seed-2-0-pro-260215"]["max_context_window"]
-        == 200000
-    )
+    assert models_by_slug["doubao-seed-2-0-pro-260215"]["max_context_window"] == 200000
     assert models[0]["truncation_policy"] == {"mode": "tokens", "limit": 10000}
 
 
@@ -715,12 +708,8 @@ def test_build_create_tool_request_uses_model_provider(monkeypatch):
     assert envs["OPENCODE_BASE_URL"] == (
         "https://ark.cn-beijing.volces.com/api/coding/v3"
     )
-    assert envs["CODEX_BASE_URL"] == (
-        "https://ark.cn-beijing.volces.com/api/coding/v3"
-    )
-    assert envs["MODEL_BASE_URL"] == (
-        "https://ark.cn-beijing.volces.com/api/coding/v3"
-    )
+    assert envs["CODEX_BASE_URL"] == ("https://ark.cn-beijing.volces.com/api/coding/v3")
+    assert envs["MODEL_BASE_URL"] == ("https://ark.cn-beijing.volces.com/api/coding/v3")
     assert envs["ANTHROPIC_BASE_URL"] == (
         "https://ark.cn-beijing.volces.com/api/coding"
     )
@@ -779,14 +768,9 @@ def test_build_codex_model_catalog_infers_custom_model_context_window():
     }
 
     for model_name, expected_context_window in expected_context_windows.items():
-        catalog = json.loads(
-            build_codex_model_catalog_json(model_name, "model_square")
-        )
+        catalog = json.loads(build_codex_model_catalog_json(model_name, "model_square"))
         assert catalog["models"][0]["slug"] == model_name
-        assert (
-            catalog["models"][0]["max_context_window"]
-            == expected_context_window
-        )
+        assert catalog["models"][0]["max_context_window"] == expected_context_window
 
 
 def test_build_create_tool_request_uses_model_api_key_env(monkeypatch):
