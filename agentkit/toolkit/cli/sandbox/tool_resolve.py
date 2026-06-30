@@ -256,9 +256,6 @@ def _normalize_tool_record(
     role_name = _get_string_value(result, "RoleName", "role_name")
     if role_name:
         stored["RoleName"] = role_name
-    skill_role_type = _get_string_value(result, "SkillRoleType", "skill_role_type")
-    if skill_role_type:
-        stored["SkillRoleType"] = skill_role_type
     websearch_set = result.get("WebSearchApiKeySet") or result.get(
         "websearch_apikey_set"
     )

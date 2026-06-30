@@ -492,12 +492,12 @@ def exec_command(
             "when creating a sandbox session."
         ),
     ),
-    enable_websearch_apikey: Optional[bool] = typer.Option(
-        None,
-        "--enable-websearch-apikey/--disable-websearch-apikey",
+    disable_websearch_apikey: bool = typer.Option(
+        False,
+        "--disable-websearch-apikey",
         help=(
-            "Control whether WEB_SEARCH_API_KEY is enabled for this session. "
-            "Only effective when the tool was created with --websearch-apikey."
+            "Disable WEB_SEARCH_API_KEY for this session. "
+            "Omit this option to keep the default enabled behavior."
         ),
     ),
 ) -> None:
@@ -518,22 +518,14 @@ def exec_command(
             tool_type=tool_type,
         )
         has_role = bool(ws_config and ws_config.get("has_role"))
-        tool_has_websearch = bool(ws_config and ws_config.get("websearch_apikey_set"))
 
-        disable_websearch = False
-        if enable_websearch_apikey is not None:
-            if has_role:
-                typer.echo(
-                    "警告：当前工具使用 IAM Role 模式，--enable-websearch-apikey/--disable-websearch-apikey 不会生效（WebSearch 权限由角色策略控制）。",
-                    err=True,
-                )
-            elif not tool_has_websearch:
-                error(
-                    "当前工具未配置 WebSearch API Key（创建时未指定 --websearch-apikey），"
-                    "--enable-websearch-apikey 无法生效。"
-                )
-            elif enable_websearch_apikey is False:
-                disable_websearch = True
+        disable_websearch = disable_websearch_apikey
+        if disable_websearch_apikey and has_role:
+            disable_websearch = False
+            typer.echo(
+                "警告：当前工具使用 IAM Role 模式，--disable-websearch-apikey 不会生效（WebSearch 权限由角色策略控制）。",
+                err=True,
+            )
 
         session = ensure_sandbox_session(
             session_id=session_id,
