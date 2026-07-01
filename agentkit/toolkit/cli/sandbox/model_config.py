@@ -41,6 +41,7 @@ CODE_ENV_CODEX_HOME = "/home/gem/.codex"
 CODEX_CONFIG_TOML_ENV = "CODEX_CONFIG_TOML"
 CODEX_MODEL_CATALOG_JSON_ENV = "CODEX_MODEL_CATALOG_JSON"
 CODEX_MODEL_CATALOG_PATH = f"{CODE_ENV_CODEX_HOME}/model-catalog.json"
+CODEX_RESERVED_MODEL_PROVIDER_IDS = {"openai"}
 
 
 class ModelProviderType(str, Enum):
@@ -214,7 +215,9 @@ def validate_model_provider_base_url(
         and resolved_model_provider not in MODEL_PROVIDER_CONFIGS
         and not resolved_model_base_url
     ):
-        raise ValueError("--model-provider requires --model-base-url for custom providers")
+        raise ValueError(
+            "--model-provider requires --model-base-url for custom providers"
+        )
 
     if (
         base_url_was_provided
@@ -289,11 +292,30 @@ def should_emit_codex_model_config(
     model_provider: str | ModelProviderType | None,
     model_base_url: Optional[str] = None,
 ) -> bool:
-    if normalize_model_base_url(model_base_url):
-        return False
-
     resolved_provider = normalize_optional_model_provider(model_provider)
-    return resolved_provider is None or resolved_provider in MODEL_PROVIDER_CONFIGS
+    if resolved_provider is None:
+        return normalize_model_base_url(model_base_url) is None
+    return resolved_provider in MODEL_PROVIDER_CONFIGS or bool(
+        normalize_model_base_url(model_base_url)
+    )
+
+
+def should_emit_codex_model_catalog(
+    model_provider: str | ModelProviderType | None,
+) -> bool:
+    resolved_provider = normalize_model_provider(model_provider)
+    return resolved_provider in MODEL_PROVIDER_CONFIGS
+
+
+def codex_model_provider_id(
+    model_provider: str | ModelProviderType | None,
+) -> str:
+    resolved_provider = normalize_model_provider(model_provider)
+    if resolved_provider in MODEL_PROVIDER_CONFIGS:
+        return resolved_provider
+    if resolved_provider in CODEX_RESERVED_MODEL_PROVIDER_IDS:
+        return f"{resolved_provider}-custom"
+    return resolved_provider
 
 
 def is_custom_model_base_url(
@@ -328,23 +350,36 @@ def _toml_quote(value: str) -> str:
 def build_codex_config_toml(
     model_name: str,
     model_provider: str | ModelProviderType | None = None,
+    model_base_url: Optional[str] = None,
 ) -> str:
     resolved_provider = normalize_model_provider(model_provider)
-    config = get_model_provider_config(resolved_provider)
+    config = get_model_provider_config_if_known(resolved_provider)
+    resolved_model_base_url = normalize_model_base_url(model_base_url)
+    provider_base_url = resolved_model_base_url or (
+        config.model_base_url if config else None
+    )
+    if not provider_base_url:
+        raise ValueError(
+            f"--model-provider has no built-in configuration: {resolved_provider}"
+        )
     resolved_model_name = resolve_model_name(model_name, resolved_provider)
+    resolved_codex_provider = codex_model_provider_id(resolved_provider)
     quoted_model = _toml_quote(resolved_model_name)
-    return "\n".join(
+    lines = [
+        f"model_provider = {_toml_quote(resolved_codex_provider)}",
+        f"model = {quoted_model}",
+        f"review_model = {quoted_model}",
+        'approval_policy = "never"',
+        'sandbox_mode = "danger-full-access"',
+        'model_reasoning_effort = "medium"',
+        'personality = "pragmatic"',
+        "check_for_update_on_startup = false",
+        'web_search = "disabled"',
+    ]
+    if should_emit_codex_model_catalog(resolved_provider):
+        lines.append(f"model_catalog_json = {_toml_quote(CODEX_MODEL_CATALOG_PATH)}")
+    lines.extend(
         [
-            f"model_provider = {_toml_quote(resolved_provider)}",
-            f"model = {quoted_model}",
-            f"review_model = {quoted_model}",
-            'approval_policy = "never"',
-            'sandbox_mode = "danger-full-access"',
-            'model_reasoning_effort = "medium"',
-            'personality = "pragmatic"',
-            "check_for_update_on_startup = false",
-            'web_search = "disabled"',
-            f"model_catalog_json = {_toml_quote(CODEX_MODEL_CATALOG_PATH)}",
             'developer_instructions = """',
             (
                 "When the user asks for simple browser operation tasks, "
@@ -352,9 +387,9 @@ def build_codex_config_toml(
             ),
             '"""',
             "",
-            f"[model_providers.{resolved_provider}]",
-            f"name = {_toml_quote(resolved_provider)}",
-            f"base_url = {_toml_quote(config.model_base_url)}",
+            f"[model_providers.{resolved_codex_provider}]",
+            f"name = {_toml_quote(resolved_codex_provider)}",
+            f"base_url = {_toml_quote(provider_base_url)}",
             'wire_api = "responses"',
             'env_key = "CODEX_API_KEY"',
             "",
@@ -369,6 +404,7 @@ def build_codex_config_toml(
             "",
         ]
     )
+    return "\n".join(lines)
 
 
 def _reasoning_levels() -> list[dict[str, str]]:

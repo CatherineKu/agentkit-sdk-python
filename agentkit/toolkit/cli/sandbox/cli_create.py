@@ -43,6 +43,7 @@ from agentkit.toolkit.cli.sandbox.model_config import (
     normalize_model_provider,
     resolve_model_base_urls,
     resolve_model_name,
+    should_emit_codex_model_catalog,
     should_emit_codex_model_config,
     validate_model_provider_base_url,
     build_codex_config_toml as _shared_build_codex_config_toml,
@@ -127,8 +128,9 @@ def _append_tool_envs(
 def _build_codex_config_toml(
     model_name: str,
     model_provider: str | ModelProviderType | None = None,
+    model_base_url: Optional[str] = None,
 ) -> str:
-    return _shared_build_codex_config_toml(model_name, model_provider)
+    return _shared_build_codex_config_toml(model_name, model_provider, model_base_url)
 
 
 def _build_codex_model_catalog_json(
@@ -142,6 +144,7 @@ def _append_code_env_tool_envs(
     envs: list[tools_types.EnvsItemForCreateTool],
     model_name: str,
     model_provider: str | ModelProviderType | None,
+    model_base_url: Optional[str],
     *,
     include_codex_model_config: bool = True,
 ) -> None:
@@ -160,18 +163,23 @@ def _append_code_env_tool_envs(
         ),
     ]
     if include_codex_model_config:
-        code_envs.extend(
-            [
-                tools_types.EnvsItemForCreateTool(
-                    Key=CODEX_CONFIG_TOML_ENV,
-                    Value=_build_codex_config_toml(model_name, model_provider),
+        code_envs.append(
+            tools_types.EnvsItemForCreateTool(
+                Key=CODEX_CONFIG_TOML_ENV,
+                Value=_build_codex_config_toml(
+                    model_name,
+                    model_provider,
+                    model_base_url,
                 ),
+            )
+        )
+        if should_emit_codex_model_catalog(model_provider):
+            code_envs.append(
                 tools_types.EnvsItemForCreateTool(
                     Key=CODEX_MODEL_CATALOG_JSON_ENV,
                     Value=_build_codex_model_catalog_json(model_name, model_provider),
-                ),
-            ]
-        )
+                )
+            )
     envs.extend(code_envs)
 
 
@@ -225,6 +233,7 @@ def _build_tool_model_envs(
             envs,
             resolved_model_name,
             resolved_model_provider,
+            resolved_model_base_url,
             include_codex_model_config=(
                 bool(resolved_model_name)
                 and should_emit_codex_model_config(

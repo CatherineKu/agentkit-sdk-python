@@ -736,8 +736,12 @@ def test_build_model_envs_option_overrides_model_api_key_env(monkeypatch) -> Non
     ]
 
 
-def test_build_model_envs_uses_model_base_url_and_skips_codex_config() -> None:
+def test_build_model_envs_uses_model_base_url_and_emits_codex_config(
+    monkeypatch,
+) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
 
     envs = session_create.build_model_envs(
         model_name="custom-model",
@@ -755,11 +759,27 @@ def test_build_model_envs_uses_model_base_url_and_skips_codex_config() -> None:
         ("CODEX_BASE_URL", "https://models.example.com/v1"),
         ("MODEL_BASE_URL", "https://models.example.com/v1"),
         ("ANTHROPIC_BASE_URL", "https://models.example.com/v1"),
+        (
+            "CODEX_CONFIG_TOML",
+            envs[8].value,
+        ),
+        (
+            "CODEX_MODEL_CATALOG_JSON",
+            envs[9].value,
+        ),
     ]
+    assert 'model_provider = "agent_plan"' in envs[8].value
+    assert 'model = "custom-model"' in envs[8].value
+    assert 'base_url = "https://models.example.com/v1"' in envs[8].value
+    assert 'model_catalog_json = "/home/gem/.codex/model-catalog.json"' in envs[8].value
 
 
-def test_build_model_envs_allows_arbitrary_model_provider_with_base_url() -> None:
+def test_build_model_envs_allows_arbitrary_model_provider_with_base_url(
+    monkeypatch,
+) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
 
     envs = session_create.build_model_envs(
         model_name="custom-model",
@@ -777,7 +797,37 @@ def test_build_model_envs_allows_arbitrary_model_provider_with_base_url() -> Non
         ("CODEX_BASE_URL", "https://models.example.com/v1"),
         ("MODEL_BASE_URL", "https://models.example.com/v1"),
         ("ANTHROPIC_BASE_URL", "https://models.example.com/v1"),
+        (
+            "CODEX_CONFIG_TOML",
+            envs[8].value,
+        ),
     ]
+    assert 'model_provider = "agent_plan_experimental"' in envs[8].value
+    assert 'model = "custom-model"' in envs[8].value
+    assert 'base_url = "https://models.example.com/v1"' in envs[8].value
+    assert "model_catalog_json" not in envs[8].value
+
+
+def test_build_model_envs_renames_reserved_codex_provider(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+
+    envs = session_create.build_model_envs(
+        model_name="custom-model",
+        model_provider="openai",
+        model_base_url="https://models.example.com/v1",
+        include_codex_config=True,
+    )
+    env_map = {item.key: item.value for item in envs}
+
+    assert env_map["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "openai"
+    assert 'model_provider = "openai-custom"' in env_map["CODEX_CONFIG_TOML"]
+    assert "[model_providers.openai-custom]" in env_map["CODEX_CONFIG_TOML"]
+    assert 'name = "openai-custom"' in env_map["CODEX_CONFIG_TOML"]
+    assert "[model_providers.openai]" not in env_map["CODEX_CONFIG_TOML"]
+    assert "model_catalog_json" not in env_map["CODEX_CONFIG_TOML"]
+    assert "CODEX_MODEL_CATALOG_JSON" not in env_map
 
 
 def test_build_model_envs_requires_base_url_with_arbitrary_model_provider() -> None:
@@ -793,8 +843,10 @@ def test_build_model_envs_requires_base_url_with_arbitrary_model_provider() -> N
         )
 
 
-def test_build_model_envs_allows_model_base_url_without_model_name() -> None:
+def test_build_model_envs_allows_model_base_url_without_model_name(monkeypatch) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
 
     envs = session_create.build_model_envs(
         model_provider="custom_provider",
@@ -811,8 +863,12 @@ def test_build_model_envs_allows_model_base_url_without_model_name() -> None:
     ]
 
 
-def test_build_model_envs_infers_provider_from_builtin_model_base_url() -> None:
+def test_build_model_envs_infers_provider_from_builtin_model_base_url(
+    monkeypatch,
+) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
 
     envs = session_create.build_model_envs(
         model_base_url="https://ark.cn-beijing.volces.com/api/coding/v3",
@@ -828,7 +884,19 @@ def test_build_model_envs_infers_provider_from_builtin_model_base_url() -> None:
         ("CODEX_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"),
         ("MODEL_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"),
         ("ANTHROPIC_BASE_URL", "https://ark.cn-beijing.volces.com/api/coding/v3"),
+        (
+            "CODEX_CONFIG_TOML",
+            envs[8].value,
+        ),
+        (
+            "CODEX_MODEL_CATALOG_JSON",
+            envs[9].value,
+        ),
     ]
+    assert 'model_provider = "coding_plan"' in envs[8].value
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"' in envs[8].value
+    )
 
 
 def test_ensure_sandbox_session_skips_tos_mount_when_tool_has_none(
@@ -4382,8 +4450,10 @@ def test_cli_exec_model_name_inherits_cached_custom_model_base_url(
     assert envs["CODEX_MODEL"] == "custom-model"
     assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
     assert envs["ANTHROPIC_BASE_URL"] == "https://models.example.com/v1"
-    assert "CODEX_CONFIG_TOML" not in envs
-    assert "CODEX_MODEL_CATALOG_JSON" not in envs
+    assert 'model_provider = "model_square"' in envs["CODEX_CONFIG_TOML"]
+    assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
+    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert "CODEX_MODEL_CATALOG_JSON" in envs
 
 
 def test_cli_exec_model_name_inherits_default_cached_custom_model_base_url(
@@ -4448,8 +4518,10 @@ def test_cli_exec_model_name_inherits_default_cached_custom_model_base_url(
     assert envs["CODEX_MODEL"] == "custom-model"
     assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
     assert envs["ANTHROPIC_BASE_URL"] == "https://models.example.com/v1"
-    assert "CODEX_CONFIG_TOML" not in envs
-    assert "CODEX_MODEL_CATALOG_JSON" not in envs
+    assert 'model_provider = "model_square"' in envs["CODEX_CONFIG_TOML"]
+    assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
+    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert "CODEX_MODEL_CATALOG_JSON" in envs
 
 
 def test_cli_exec_model_provider_sets_default_model_and_codex_config(
@@ -4530,7 +4602,10 @@ def test_cli_exec_rejects_model_base_url_without_model_provider() -> None:
     )
 
     assert result.exit_code != 0
-    assert "--model-base-url requires --model-provider for non-Ark base URLs" in result.output
+    assert (
+        "--model-base-url requires --model-provider for non-Ark base URLs"
+        in result.output
+    )
 
 
 def test_cli_exec_rejects_non_ark_model_base_url_without_model_provider() -> None:
@@ -4551,7 +4626,10 @@ def test_cli_exec_rejects_non_ark_model_base_url_without_model_provider() -> Non
     )
 
     assert result.exit_code != 0
-    assert "--model-base-url requires --model-provider for non-Ark base URLs" in result.output
+    assert (
+        "--model-base-url requires --model-provider for non-Ark base URLs"
+        in result.output
+    )
 
 
 def test_cli_exec_rejects_arbitrary_model_provider_without_base_url() -> None:
@@ -4572,10 +4650,13 @@ def test_cli_exec_rejects_arbitrary_model_provider_without_base_url() -> None:
     )
 
     assert result.exit_code != 0
-    assert "--model-provider requires --model-base-url for custom providers" in result.output
+    assert (
+        "--model-provider requires --model-base-url for custom providers"
+        in result.output
+    )
 
 
-def test_cli_exec_model_base_url_overrides_provider_and_skips_codex_config(
+def test_cli_exec_custom_provider_base_url_emits_codex_config_without_catalog(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -4615,7 +4696,7 @@ def test_cli_exec_model_base_url_overrides_provider_and_skips_codex_config(
             "--session-id",
             "user-1",
             "--model-provider",
-            "agent_plan",
+            "custom_provider",
             "--model-name",
             "custom-model",
             "--model-base-url",
@@ -4625,13 +4706,16 @@ def test_cli_exec_model_base_url_overrides_provider_and_skips_codex_config(
 
     assert result.exit_code == 0
     envs = {item.key: item.value for item in captured_session["envs"]}
-    assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "agent_plan"
+    assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "custom_provider"
     assert envs["CODEX_MODEL"] == "custom-model"
     assert envs["OPENCODE_BASE_URL"] == "https://models.example.com/v1"
     assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
     assert envs["MODEL_BASE_URL"] == "https://models.example.com/v1"
     assert envs["ANTHROPIC_BASE_URL"] == "https://models.example.com/v1"
-    assert "CODEX_CONFIG_TOML" not in envs
+    assert 'model_provider = "custom_provider"' in envs["CODEX_CONFIG_TOML"]
+    assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
+    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert "model_catalog_json" not in envs["CODEX_CONFIG_TOML"]
     assert "CODEX_MODEL_CATALOG_JSON" not in envs
 
 
