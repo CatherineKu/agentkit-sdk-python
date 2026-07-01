@@ -40,6 +40,7 @@ from agentkit.toolkit.cli.sandbox.model_config import (
     normalize_optional_model_provider,
     resolve_model_base_urls,
     resolve_model_name,
+    should_emit_codex_model_catalog,
     should_emit_codex_model_config,
     validate_model_provider_base_url,
 )
@@ -86,29 +87,32 @@ def _append_codex_config_envs(
     envs: list[tools_types.EnvsItemForCreateSession],
     model_name: Optional[str],
     model_provider: str | ModelProviderType | None,
+    model_base_url: Optional[str],
 ) -> None:
     resolved_model_name = (model_name or "").strip()
     if not resolved_model_name:
         return
 
-    envs.extend(
-        [
-            tools_types.EnvsItemForCreateSession(
-                key=CODEX_CONFIG_TOML_ENV,
-                value=build_codex_config_toml(
-                    resolved_model_name,
-                    model_provider,
-                ),
+    envs.append(
+        tools_types.EnvsItemForCreateSession(
+            key=CODEX_CONFIG_TOML_ENV,
+            value=build_codex_config_toml(
+                resolved_model_name,
+                model_provider,
+                model_base_url,
             ),
+        )
+    )
+    if should_emit_codex_model_catalog(model_provider):
+        envs.append(
             tools_types.EnvsItemForCreateSession(
                 key=CODEX_MODEL_CATALOG_JSON_ENV,
                 value=build_codex_model_catalog_json(
                     resolved_model_name,
                     model_provider,
                 ),
-            ),
-        ]
-    )
+            )
+        )
 
 
 def build_model_envs(
@@ -133,7 +137,9 @@ def build_model_envs(
     effective_model_provider = model_provider or infer_model_provider_from_base_url(
         resolved_model_base_url
     )
-    resolved_model_provider = normalize_optional_model_provider(effective_model_provider)
+    resolved_model_provider = normalize_optional_model_provider(
+        effective_model_provider
+    )
     resolved_model_name = (
         resolve_model_name(model_name, resolved_model_provider)
         if resolved_model_provider
@@ -170,13 +176,12 @@ def build_model_envs(
             envs,
             resolved_model_name,
             resolved_model_provider,
+            resolved_model_base_url,
         )
     _append_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
     if disable_websearch_apikey:
         envs.append(
-            tools_types.EnvsItemForCreateSession(
-                key=WEB_SEARCH_API_KEY_ENV, value=""
-            )
+            tools_types.EnvsItemForCreateSession(key=WEB_SEARCH_API_KEY_ENV, value="")
         )
     return envs or None
 

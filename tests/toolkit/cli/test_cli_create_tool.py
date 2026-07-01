@@ -753,8 +753,14 @@ def test_build_create_tool_request_uses_model_base_url_over_provider(monkeypatch
     assert envs["OPENCODE_DISABLE_AUTOUPDATE"] == "1"
     assert envs["HOME"] == "/home/gem"
     assert envs["CODEX_HOME"] == "/home/gem/.codex"
-    assert "CODEX_CONFIG_TOML" not in envs
-    assert "CODEX_MODEL_CATALOG_JSON" not in envs
+    assert 'model_provider = "agent_plan"' in envs["CODEX_CONFIG_TOML"]
+    assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
+    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert (
+        'model_catalog_json = "/home/gem/.codex/model-catalog.json"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+    assert "CODEX_MODEL_CATALOG_JSON" in envs
 
 
 def test_build_create_tool_request_allows_arbitrary_model_provider_with_base_url(
@@ -780,7 +786,36 @@ def test_build_create_tool_request_allows_arbitrary_model_provider_with_base_url
     assert envs["CODEX_MODEL"] == "custom-model"
     assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
     assert envs["ANTHROPIC_BASE_URL"] == "https://models.example.com/v1"
-    assert "CODEX_CONFIG_TOML" not in envs
+    assert 'model_provider = "model-square-experimental"' in envs["CODEX_CONFIG_TOML"]
+    assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
+    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert "model_catalog_json" not in envs["CODEX_CONFIG_TOML"]
+    assert "CODEX_MODEL_CATALOG_JSON" not in envs
+
+
+def test_build_create_tool_request_renames_reserved_codex_provider(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="CodeEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="cn-beijing",
+        model_provider="openai",
+        model_name="custom-model",
+        model_base_url="https://models.example.com/v1",
+    )
+
+    envs = {item.key: item.value for item in request.envs}
+    assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "openai"
+    assert 'model_provider = "openai-custom"' in envs["CODEX_CONFIG_TOML"]
+    assert "[model_providers.openai-custom]" in envs["CODEX_CONFIG_TOML"]
+    assert 'name = "openai-custom"' in envs["CODEX_CONFIG_TOML"]
+    assert "[model_providers.openai]" not in envs["CODEX_CONFIG_TOML"]
+    assert "model_catalog_json" not in envs["CODEX_CONFIG_TOML"]
     assert "CODEX_MODEL_CATALOG_JSON" not in envs
 
 
@@ -953,8 +988,12 @@ def test_build_create_tool_request_infers_provider_from_builtin_model_base_url(
     assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "agent_plan"
     assert envs["CODEX_MODEL"] == "deepseek-v4-flash"
     assert envs["CODEX_BASE_URL"] == "https://ark.cn-beijing.volces.com/api/plan/v3"
-    assert "CODEX_CONFIG_TOML" not in envs
-    assert "CODEX_MODEL_CATALOG_JSON" not in envs
+    assert 'model_provider = "agent_plan"' in envs["CODEX_CONFIG_TOML"]
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/plan/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
+    assert "CODEX_MODEL_CATALOG_JSON" in envs
 
 
 def test_create_command_rejects_non_ark_model_base_url_without_model_provider(
@@ -982,11 +1021,16 @@ def test_create_command_rejects_non_ark_model_base_url_without_model_provider(
     )
 
     assert result.exit_code != 0
-    assert "--model-base-url requires --model-provider for non-Ark base URLs" in result.output
+    assert (
+        "--model-base-url requires --model-provider for non-Ark base URLs"
+        in result.output
+    )
     assert _FakeToolsClient.instances == []
 
 
-def test_create_command_accepts_model_base_url_with_model_name_and_provider(monkeypatch):
+def test_create_command_accepts_model_base_url_with_model_name_and_provider(
+    monkeypatch,
+):
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create
 
@@ -1013,7 +1057,10 @@ def test_create_command_accepts_model_base_url_with_model_name_and_provider(monk
     assert result.exit_code == 0
     envs = {item.key: item.value for item in _FakeToolsClient.last_request.envs}
     assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
-    assert "CODEX_CONFIG_TOML" not in envs
+    assert 'model_provider = "custom_provider"' in envs["CODEX_CONFIG_TOML"]
+    assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
+    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert "model_catalog_json" not in envs["CODEX_CONFIG_TOML"]
     assert "CODEX_MODEL_CATALOG_JSON" not in envs
 
 

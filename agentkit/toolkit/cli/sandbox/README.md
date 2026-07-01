@@ -73,9 +73,12 @@ Options:
   added to the Codex model catalog with default capabilities.
 - `--model-base-url`: optional. Injected into `OPENCODE_BASE_URL`,
   `CODEX_BASE_URL`, `MODEL_BASE_URL`, and `ANTHROPIC_BASE_URL`. When provided,
-  it takes precedence over provider base URLs and the CLI skips
-  `CODEX_CONFIG_TOML` and `CODEX_MODEL_CATALOG_JSON`. Non-Ark custom URLs
-  require `--model-provider`.
+  it takes precedence over provider base URLs. Built-in providers still receive
+  `CODEX_CONFIG_TOML` and `CODEX_MODEL_CATALOG_JSON`; custom providers receive
+  `CODEX_CONFIG_TOML` without `model_catalog_json`. If a custom provider name is
+  reserved by Codex, such as `openai`, the generated Codex provider ID is
+  renamed, for example to `openai-custom`. Non-Ark custom URLs require
+  `--model-provider`.
 - `--model-api-key`: optional. Injected into the tool as `OPENCODE_API_KEY`,
   `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If omitted, the CLI uses
   `MODEL_API_KEY` when that environment variable is set.
@@ -473,8 +476,11 @@ Options:
 - `--model-base-url`: optional. When creating a sandbox session, injects the
   value into `OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
   `ANTHROPIC_BASE_URL`. When provided, it takes precedence over provider base
-  URLs and skips `CODEX_CONFIG_TOML` / `CODEX_MODEL_CATALOG_JSON`. Non-Ark
-  custom URLs require `--model-provider`.
+  URLs. Built-in providers still receive `CODEX_CONFIG_TOML` and
+  `CODEX_MODEL_CATALOG_JSON`; custom providers receive `CODEX_CONFIG_TOML`
+  without `model_catalog_json`. If a custom provider name is reserved by Codex,
+  such as `openai`, the generated Codex provider ID is renamed, for example to
+  `openai-custom`. Non-Ark custom URLs require `--model-provider`.
 - `--model-api-key`: optional. When creating a sandbox session, injects the
   value as `OPENCODE_API_KEY`, `CODEX_API_KEY`, and `ANTHROPIC_AUTH_TOKEN`. If
   omitted, the CLI uses `MODEL_API_KEY` when that environment variable is set.
@@ -503,9 +509,11 @@ current shell ID from the list when that connection is detached or closed.
 When `--model-name` is provided without `--model-provider`, `exec` first tries
 to reuse `AGENTKIT_SANDBOX_MODEL_PROVIDER` from the cached or remote tool
 configuration, then falls back to `model_square` when no marker is available.
-For built-in provider URLs, it updates `CODEX_CONFIG_TOML` /
+For built-in providers, it updates `CODEX_CONFIG_TOML` /
 `CODEX_MODEL_CATALOG_JSON` for `CodeEnv` sessions. If the tool carries a custom
-model base URL, exec inherits that URL and skips those Codex config envs.
+model base URL, exec inherits that URL and writes it into the generated Codex
+provider config. Custom providers omit `model_catalog_json`; reserved Codex
+provider IDs such as `openai` are renamed in the generated config.
 
 Press `Ctrl-]`, or type `exit` / `exit()`, to detach from the local terminal.
 `Ctrl-C` is forwarded to the remote process, which is useful for interrupting
