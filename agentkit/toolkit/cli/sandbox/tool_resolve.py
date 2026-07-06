@@ -22,11 +22,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.sandbox.agentkit_client import (
+    AgentkitToolsClient,
+    is_tip_agentkit_client,
+)
 from agentkit.toolkit.cli.sandbox.model_config import (
-    ANTHROPIC_BASE_URL_ENV_KEYS,
-    MODEL_BASE_URL_ENV_KEYS,
     MODEL_PROVIDER_ENV,
     model_provider_from_env_value,
 )
@@ -34,7 +35,7 @@ from agentkit.toolkit.cli.sandbox.sandbox_client import error
 
 SANDBOX_TOOL_STORE_PATH = Path(".agentkit") / "sandbox" / "tools.json"
 DEFAULT_SANDBOX_TOOL_TYPE = "CodeEnv"
-VALID_SANDBOX_TOOL_TYPES = ("CodeEnv", "SkillEnv")
+VALID_SANDBOX_TOOL_TYPES = ("CodeEnv", "SkillEnv", "Private")
 READY_TOOL_STATUS = "Ready"
 TOOL_NOT_FOUND_ERROR_CODE = "InvalidResource.NotFound"
 
@@ -42,6 +43,7 @@ TOOL_NOT_FOUND_ERROR_CODE = "InvalidResource.NotFound"
 class SandboxToolType(str, Enum):
     CODE_ENV = "CodeEnv"
     SKILL_ENV = "SkillEnv"
+    PRIVATE = "Private"
 
 
 def normalize_tool_type(tool_type: str | SandboxToolType | None) -> str:
@@ -50,6 +52,12 @@ def normalize_tool_type(tool_type: str | SandboxToolType | None) -> str:
     if resolved not in VALID_SANDBOX_TOOL_TYPES:
         error("--tool-type must be one of: " + ", ".join(VALID_SANDBOX_TOOL_TYPES))
     return resolved
+
+
+def is_resolvable_tool_type(tool_type: str | SandboxToolType | None) -> bool:
+    value = tool_type.value if isinstance(tool_type, SandboxToolType) else tool_type
+    resolved = (value or DEFAULT_SANDBOX_TOOL_TYPE).strip()
+    return resolved in VALID_SANDBOX_TOOL_TYPES
 
 
 def _get_tool_store_path() -> Path:
@@ -113,22 +121,6 @@ def _get_tool_model_provider(payload: object) -> str | None:
     )
 
 
-def _get_first_tool_env_value(payload: object, keys: tuple[str, ...]) -> str | None:
-    for key in keys:
-        value = _get_tool_env_value(payload, key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
-
-
-def _get_tool_model_base_url(payload: object) -> str | None:
-    return _get_first_tool_env_value(payload, MODEL_BASE_URL_ENV_KEYS)
-
-
-def _get_tool_anthropic_base_url(payload: object) -> str | None:
-    return _get_first_tool_env_value(payload, ANTHROPIC_BASE_URL_ENV_KEYS)
-
-
 def _build_tool_record(tool: object, tool_type: str) -> dict[str, object] | None:
     payload = _get_tool_payload(tool)
     tool_id = _get_string_field(payload, "ToolId", "tool_id")
@@ -143,12 +135,6 @@ def _build_tool_record(tool: object, tool_type: str) -> dict[str, object] | None
     model_provider = _get_tool_model_provider(payload)
     if model_provider:
         record["ModelProvider"] = model_provider
-    model_base_url = _get_tool_model_base_url(payload)
-    if model_base_url:
-        record["ModelBaseUrl"] = model_base_url
-    anthropic_base_url = _get_tool_anthropic_base_url(payload)
-    if anthropic_base_url:
-        record["AnthropicBaseUrl"] = anthropic_base_url
     role_name = _get_string_field(payload, "RoleName", "role_name")
     if isinstance(role_name, str) and role_name.strip():
         record["RoleName"] = role_name.strip()
@@ -222,6 +208,9 @@ def _validate_existing_tool_id(
     tool_type: str | SandboxToolType | None,
     save_result: bool = False,
 ) -> str:
+    if is_tip_agentkit_client(client):
+        return tool_id
+
     try:
         response = client.get_tool(tools_types.GetToolRequest(tool_id=tool_id))
     except Exception as exc:
@@ -274,16 +263,6 @@ def _normalize_tool_record(
     )
     if model_provider:
         stored["ModelProvider"] = model_provider
-    model_base_url = _get_string_value(result, "ModelBaseUrl", "model_base_url")
-    if model_base_url:
-        stored["ModelBaseUrl"] = model_base_url
-    anthropic_base_url = _get_string_value(
-        result,
-        "AnthropicBaseUrl",
-        "anthropic_base_url",
-    )
-    if anthropic_base_url:
-        stored["AnthropicBaseUrl"] = anthropic_base_url
     role_name = _get_string_value(result, "RoleName", "role_name")
     if role_name:
         stored["RoleName"] = role_name
@@ -307,6 +286,18 @@ def save_tool_result(tool_type: str, result: dict[str, object]) -> None:
         json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
+
+
+def save_tool_result_if_resolvable(
+    tool_type: str | SandboxToolType | None,
+    result: dict[str, object],
+) -> bool:
+    result_tool_type = _get_string_value(result, "ToolType", "tool_type")
+    if result_tool_type and not is_resolvable_tool_type(result_tool_type):
+        return False
+
+    save_tool_result(normalize_tool_type(tool_type), result)
+    return True
 
 
 def find_tool_result(tool_type: str) -> dict[str, object] | None:
@@ -339,24 +330,6 @@ def find_tool_model_provider(
     )
 
 
-def find_tool_model_base_urls(
-    *,
-    tool_id: Optional[str],
-    tool_type: str | SandboxToolType | None,
-) -> tuple[str | None, str | None]:
-    result = find_tool_result(normalize_tool_type(tool_type))
-    if not result:
-        return None, None
-
-    cached_tool_id = _get_string_value(result, "ToolId", "tool_id")
-    if tool_id and cached_tool_id != tool_id:
-        return None, None
-    return (
-        _get_string_value(result, "ModelBaseUrl", "model_base_url"),
-        _get_string_value(result, "AnthropicBaseUrl", "anthropic_base_url"),
-    )
-
-
 def get_tool_websearch_config(
     *,
     tool_id: Optional[str],
@@ -386,7 +359,7 @@ def get_tool_websearch_config(
     record = _build_tool_record(response, resolved_tool_type)
     if not record:
         return None
-    save_tool_result(resolved_tool_type, record)
+    save_tool_result_if_resolvable(resolved_tool_type, record)
     return {
         "has_role": bool(_get_string_value(record, "RoleName", "role_name")),
         "websearch_apikey_set": bool(record.get("WebSearchApiKeySet")),
@@ -403,28 +376,11 @@ def get_remote_tool_model_provider(
     response = client.get_tool(tools_types.GetToolRequest(tool_id=tool_id))
     record = _build_tool_record(response, normalize_tool_type(tool_type))
     if record:
-        save_tool_result(normalize_tool_type(tool_type), record)
+        save_tool_result_if_resolvable(tool_type, record)
         return model_provider_from_env_value(
             _get_string_value(record, "ModelProvider", "model_provider")
         )
     return None
-
-
-def get_remote_tool_model_base_urls(
-    client: AgentkitToolsClient,
-    tool_id: str,
-    *,
-    tool_type: str | SandboxToolType | None,
-) -> tuple[str | None, str | None]:
-    response = client.get_tool(tools_types.GetToolRequest(tool_id=tool_id))
-    record = _build_tool_record(response, normalize_tool_type(tool_type))
-    if record:
-        save_tool_result(normalize_tool_type(tool_type), record)
-        return (
-            _get_string_value(record, "ModelBaseUrl", "model_base_url"),
-            _get_string_value(record, "AnthropicBaseUrl", "anthropic_base_url"),
-        )
-    return None, None
 
 
 def _get_cached_tool_id(tool_type: str) -> str | None:
@@ -492,6 +448,11 @@ def resolve_sandbox_tool_id(
         return resolved_tool_id
 
     resolved_tool_type = normalize_tool_type(tool_type)
+    if is_tip_agentkit_client(client):
+        error(
+            "TIP sandbox auth requires an existing sandbox tool ID. "
+            f"Set --tool-id or {env_var_name}."
+        )
     return _create_tool(resolved_tool_type)
 
 
@@ -535,6 +496,9 @@ def resolve_existing_sandbox_tool_id(
             tool_type=resolved_tool_type,
             save_result=True,
         )
+
+    if is_tip_agentkit_client(client):
+        return None
 
     listed_tool_id = _list_first_tool(client, resolved_tool_type)
     if listed_tool_id:

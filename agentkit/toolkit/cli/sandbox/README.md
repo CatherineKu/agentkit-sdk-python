@@ -53,19 +53,28 @@ agentkit sandbox create \
 Options:
 
 - `--tool-type`: optional. Tool type to create; defaults to `CodeEnv`.
+  `Private` creates a private-image tool and applies the CLI's default
+  aio-sandbox environment, command, and port profile.
 - `--tool-name`: optional. Tool name. If omitted, the CLI generates a name like
   `agentkit-codeenv-<random>`.
+- `--image-url`: optional custom image URL. Required when
+  `--tool-type Private`.
 - `--tos-bucket`: optional. TOS bucket to mount. If omitted, the tool is
   created without TOS mount configuration.
 - `--tos-mount`: optional. Local mount path for `--tos-bucket`; defaults to
   `/home/gem/workspace`.
 - `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
   `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
+- `--network-config`: optional. Network configuration as inline JSON or a path
+  to a JSON file. If omitted, the tool is created with public access enabled
+  and private access disabled.
 - `--model-provider`: optional. Model provider marker to inject into
-  `AGENTKIT_SANDBOX_MODEL_PROVIDER`; defaults to `model_square`. The built-in
-  providers `model_square`, `coding_plan`, and `agent_plan` also provide base
-  URLs, default models, and Codex model catalog entries. Other provider strings
-  are passed through without built-in URL or catalog handling.
+  `AGENTKIT_SANDBOX_MODEL_PROVIDER`; defaults to `model_square`, or
+  `byteplus_model_square` when `CLOUD_PROVIDER` / `AGENTKIT_CLOUD_PROVIDER` is
+  `byteplus`. The built-in providers `model_square`, `coding_plan`,
+  `agent_plan`, `byteplus_model_square`, and `byteplus_coding_plan` also
+  provide base URLs, default models, and Codex model catalog entries. Other
+  provider strings are passed through without built-in URL or catalog handling.
 - `--model-name`: optional. Injected into the tool as `OPENCODE_MODEL`,
   `CODEX_MODEL`, and `ANTHROPIC_MODEL`. If omitted for a built-in provider,
   that provider's default model is used. Custom model names are allowed and are
@@ -85,7 +94,49 @@ Options:
 The sandbox create request maps `--cpu` to `CpuMilli=<cpu * 1000>` and
 `MemoryMb=<cpu * 2048>`, so the default shape is 4 vCPU / 8 GiB.
 
-The tool injects the selected built-in provider's Volcengine Ark compatible
+Network configuration uses the same access concepts as the AgentKit console:
+
+```json
+{
+  "private_access": true,
+  "public_access": true,
+  "vpc_id": "vpc-xxxxxxxx",
+  "subnet_ids": ["subnet-aaaaaaaa"],
+  "enable_shared_internet_access": true
+}
+```
+
+`public_access` defaults to `true`; `private_access` defaults to `false`.
+When `private_access` is `true`, `vpc_id` is required. `subnet_ids` may be an
+array of strings or a comma-separated string. The CLI validates JSON syntax,
+field names, field types, and field combinations before calling `CreateTool`.
+VPC and subnet existence or availability errors are returned by the control
+plane.
+
+Examples:
+
+```bash
+agentkit sandbox create \
+  --network-config network.json
+
+agentkit sandbox create \
+  --network-config '{"private_access":true,"public_access":true,"vpc_id":"vpc-xxxxxxxx","subnet_ids":["subnet-aaaaaaaa"]}'
+```
+
+When `--tool-type Private` is used, the CLI creates a private-image tool and
+applies the default aio-sandbox startup profile:
+
+```bash
+agentkit sandbox create \
+  --tool-type Private \
+  --image-url registry.example.com/custom-image:latest
+```
+
+The CreateTool request uses `ToolType: Private`, `Command: /opt/gem/run.sh`,
+port `8080`, and the environment variables matching the aio-sandbox startup
+profile. Future CLI options may expose command, port, and environment overrides.
+
+The tool injects the selected built-in provider's Ark-compatible
 endpoints into `OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
 `ANTHROPIC_BASE_URL`, and stores the selected provider in
 `AGENTKIT_SANDBOX_MODEL_PROVIDER`. For built-in provider URLs, the same provider
@@ -105,6 +156,8 @@ Provider defaults:
 | `model_square` | `deepseek-v4-flash-260425` | `https://ark.cn-beijing.volces.com/api/v3` |
 | `coding_plan` | `deepseek-v4-flash` | `https://ark.cn-beijing.volces.com/api/coding/v3` |
 | `agent_plan` | `deepseek-v4-flash` | `https://ark.cn-beijing.volces.com/api/plan/v3` |
+| `byteplus_model_square` | `deepseek-v4-flash-260425` | `https://ark.ap-southeast.bytepluses.com/api/v3` |
+| `byteplus_coding_plan` | `deepseek-v4-flash` | `https://ark.ap-southeast.bytepluses.com/api/coding/v3` |
 
 Credential resolution is delegated to the underlying SDK/service clients:
 `AgentkitToolsClient` handles `CreateTool` credentials, and `TOSService` handles
@@ -467,11 +520,11 @@ Options:
   as `OPENCODE_MODEL`, `CODEX_MODEL`, and `ANTHROPIC_MODEL`. Custom model names
   are allowed.
 - `--model-provider`: optional. When creating a sandbox session, injects the
-  provider marker. The built-in providers `model_square`, `coding_plan`, and
-  `agent_plan` also provide default models, base URL envs, and
-  `CODEX_CONFIG_TOML` / `CODEX_MODEL_CATALOG_JSON` updates for `CodeEnv`
-  sessions. Other provider strings are passed through without built-in URL or
-  catalog handling.
+  provider marker. The built-in providers `model_square`, `coding_plan`,
+  `agent_plan`, `byteplus_model_square`, and `byteplus_coding_plan` also
+  provide default models, base URL envs, and `CODEX_CONFIG_TOML` /
+  `CODEX_MODEL_CATALOG_JSON` updates for `CodeEnv` sessions. Other provider
+  strings are passed through without built-in URL or catalog handling.
 - `--model-base-url`: optional. When creating a sandbox session, injects the
   value into `OPENCODE_BASE_URL`, `CODEX_BASE_URL`, `MODEL_BASE_URL`, and
   `ANTHROPIC_BASE_URL`. When provided, it takes precedence over provider base
@@ -507,7 +560,9 @@ current shell ID from the list when that connection is detached or closed.
 
 When `--model-name` is provided without `--model-provider`, `exec` first tries
 to reuse `AGENTKIT_SANDBOX_MODEL_PROVIDER` from the cached or remote tool
-configuration, then falls back to `model_square` when no marker is available.
+configuration. When no marker is available, it falls back to `model_square`, or
+`byteplus_model_square` when `CLOUD_PROVIDER` / `AGENTKIT_CLOUD_PROVIDER` is
+`byteplus`.
 For built-in providers, it updates `CODEX_CONFIG_TOML` /
 `CODEX_MODEL_CATALOG_JSON` for `CodeEnv` sessions. If the tool carries a custom
 model base URL, exec inherits that URL and writes it into the generated Codex

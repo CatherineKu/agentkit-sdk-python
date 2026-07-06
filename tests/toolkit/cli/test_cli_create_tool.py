@@ -44,6 +44,12 @@ def _use_tool_store_path(tool_store_path):
     pass
 
 
+@pytest.fixture(autouse=True)
+def _clear_cloud_provider_env(monkeypatch):
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+
+
 class _FakeCreateToolResponse:
     tool_id = "t-created"
 
@@ -219,6 +225,48 @@ def test_create_command_skips_tos_mount_by_default(
             "ModelProvider": "model_square",
         }
     }
+
+
+def test_create_command_passes_network_config_file(monkeypatch, tmp_path):
+    from agentkit.toolkit.cli.cli import app
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "AgentkitToolsClient", _FakeToolsClient)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+    config_path = tmp_path / "network.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "private_access": True,
+                "public_access": True,
+                "vpc_id": "vpc-123",
+                "subnet_ids": ["subnet-a"],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "create",
+            "--tool-name",
+            "demo-tool",
+            "--network-config",
+            str(config_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    network = _FakeToolsClient.last_request.network_configuration
+    assert network is not None
+    assert network.enable_private_network is True
+    assert network.enable_public_network is True
+    assert network.vpc_configuration is not None
+    assert network.vpc_configuration.vpc_id == "vpc-123"
+    assert network.vpc_configuration.subnet_ids == ["subnet-a"]
 
 
 def test_create_command_uses_region_envs(monkeypatch):
@@ -572,6 +620,170 @@ def test_build_create_tool_request_skips_tos_mount_without_bucket(monkeypatch):
     assert request.tos_mount_config is None
 
 
+def test_build_create_tool_request_uses_inline_network_config(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="CodeEnv",
+        name="demo-tool",
+        tos_bucket=None,
+        tos_region="cn-beijing",
+        network_config=json.dumps(
+            {
+                "private_access": True,
+                "public_access": True,
+                "vpc_id": " vpc-123 ",
+                "subnet_ids": [" subnet-a ", "subnet-b"],
+                "enable_shared_internet_access": True,
+            }
+        ),
+    )
+
+    network = request.network_configuration
+    assert network is not None
+    assert network.enable_private_network is True
+    assert network.enable_public_network is True
+    vpc = network.vpc_configuration
+    assert vpc is not None
+    assert vpc.vpc_id == "vpc-123"
+    assert vpc.subnet_ids == ["subnet-a", "subnet-b"]
+    assert vpc.enable_shared_internet_access is True
+
+
+def test_build_create_tool_request_uses_network_config_file(monkeypatch, tmp_path):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+    config_path = tmp_path / "network.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "private_access": True,
+                "public_access": False,
+                "vpc_id": "vpc-123",
+                "subnet_ids": "subnet-a, subnet-b",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    request = cli_create._build_create_tool_request(
+        tool_type="CodeEnv",
+        name="demo-tool",
+        tos_bucket=None,
+        tos_region="cn-beijing",
+        network_config=str(config_path),
+    )
+
+    network = request.network_configuration
+    assert network is not None
+    assert network.enable_private_network is True
+    assert network.enable_public_network is False
+    assert network.vpc_configuration is not None
+    assert network.vpc_configuration.vpc_id == "vpc-123"
+    assert network.vpc_configuration.subnet_ids == ["subnet-a", "subnet-b"]
+    assert network.vpc_configuration.enable_shared_internet_access is False
+
+
+@pytest.mark.parametrize(
+    ("network_config", "message"),
+    [
+        ("[]", "expected a JSON object"),
+        ('{"private_access":"yes"}', "private_access must be a boolean"),
+        (
+            '{"private_access":true}',
+            "vpc_id is required when private_access is true",
+        ),
+        (
+            '{"vpc_id":"vpc-123"}',
+            "vpc_id, subnet_ids, and enable_shared_internet_access require "
+            "private_access=true",
+        ),
+        ('{"private_access":true,"vpc_id":"vpc-123","foo":true}', "foo"),
+        (
+            '{"private_access":true,"vpc_id":"vpc-123","subnet_ids":[1]}',
+            "subnet_ids[0] must be a string",
+        ),
+    ],
+)
+def test_build_network_configuration_reports_field_errors(
+    network_config,
+    message,
+    capsys,
+):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    with pytest.raises(cli_create.typer.Exit):
+        cli_create._build_network_configuration(network_config)
+
+    captured = capsys.readouterr()
+    assert "Invalid --network-config" in captured.err
+    assert message in captured.err
+
+
+def test_build_create_tool_request_adds_private_defaults(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+    from agentkit.toolkit.cli.sandbox.env_config import (
+        PRIVATE_TOOL_COMMAND,
+        PRIVATE_TOOL_VARS,
+    )
+
+    _reset_fake_tools_client()
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="Private",
+        name="demo-tool",
+        tos_bucket=None,
+        tos_region="cn-beijing",
+        image_url="registry.example.com/custom-image:latest",
+        model_name="ignored-model",
+        **{"model_" + "api_key": _PLACEHOLDER_MODEL_VALUE},
+    )
+
+    assert request.tool_type == "Private"
+    assert request.image_url == "registry.example.com/custom-image:latest"
+    assert request.command == PRIVATE_TOOL_COMMAND
+    assert request.port == 8080
+    assert request.tos_mount_config is None
+    env_map = {item.key: item.value for item in request.envs}
+    assert [
+        (item.key, item.value) for item in request.envs[: len(PRIVATE_TOOL_VARS)]
+    ] == list(PRIVATE_TOOL_VARS)
+    env_keys = set(env_map)
+    assert "ABC" not in env_keys
+    assert env_map["OPENCODE_MODEL"] == "ignored-model"
+    assert env_map["CODEX_MODEL"] == "ignored-model"
+    assert env_map["ANTHROPIC_MODEL"] == "ignored-model"
+    assert env_map["CODEX_API_KEY"] == _PLACEHOLDER_MODEL_VALUE
+    assert env_map["CODEX_BASE_URL"] == "https://ark.cn-beijing.volces.com/api/v3"
+    assert "CODEX_CONFIG_TOML" in env_map
+    assert "CODEX_MODEL_CATALOG_JSON" in env_map
+    assert env_map["DISABLE_JUPYTER"] == "false"
+    assert env_map["DISABLE_CODE_SERVER"] == "false"
+    assert env_map["BROWSER_EXTRA_ARGS"] == ""
+
+
+def test_build_create_tool_request_requires_image_url_for_private(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    with pytest.raises(cli_create.typer.Exit):
+        cli_create._build_create_tool_request(
+            tool_type="Private",
+            name="demo-tool",
+            tos_bucket=None,
+            tos_region="cn-beijing",
+        )
+
+
 def test_build_create_tool_request_derives_memory_from_cpu(monkeypatch):
     from agentkit.toolkit.cli.sandbox import cli_create
 
@@ -588,6 +800,56 @@ def test_build_create_tool_request_derives_memory_from_cpu(monkeypatch):
 
     assert request.cpu_milli == 8000
     assert request.memory_mb == 16384
+
+
+def test_create_command_adds_private_defaults_and_caches_private_type(
+    monkeypatch,
+    tool_store_path,
+):
+    from agentkit.toolkit.cli.cli import app
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "AgentkitToolsClient", _FakeToolsClient)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+    monkeypatch.setattr(
+        cli_create,
+        "_wait_for_tool_ready",
+        lambda _client, _tool_id: SimpleNamespace(
+            tool_type="Private",
+            name="demo-tool",
+            status="Ready",
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "create",
+            "--tool-type",
+            "Private",
+            "--tool-name",
+            "demo-aio",
+            "--image-url",
+            "registry.example.com/custom-image:latest",
+        ],
+    )
+
+    assert result.exit_code == 0
+    request = _FakeToolsClient.last_request
+    assert request.tool_type == "Private"
+    assert request.command == "/opt/gem/run.sh"
+    assert request.image_url == "registry.example.com/custom-image:latest"
+    assert request.port == 8080
+    tool_store = json.loads(tool_store_path.read_text(encoding="utf-8"))
+    assert tool_store["Private"] == {
+        "ToolId": "t-created",
+        "Name": "demo-tool",
+        "Status": "Ready",
+        "ToolType": "Private",
+        "ModelProvider": "model_square",
+    }
 
 
 def test_build_create_tool_request_adds_model_envs(monkeypatch):
@@ -817,24 +1079,24 @@ def test_build_create_tool_request_renames_reserved_codex_provider(monkeypatch):
     assert "[model_providers.openai]" not in envs["CODEX_CONFIG_TOML"]
     assert "model_catalog_json" not in envs["CODEX_CONFIG_TOML"]
     assert "CODEX_MODEL_CATALOG_JSON" not in envs
-    # OAuth (ChatGPT) provider: authenticates with the injected auth.json, never an API key,
-    # and passes model-name / base-url through.
-    assert "requires_openai_auth = true" in envs["CODEX_CONFIG_TOML"]
-    assert "env_key" not in envs["CODEX_CONFIG_TOML"]
+    assert 'env_key = "CODEX_API_KEY"' in envs["CODEX_CONFIG_TOML"]
+    assert "requires_openai_auth" not in envs["CODEX_CONFIG_TOML"]
     assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
     assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
 
 
-def test_build_codex_config_toml_openai_auth_defaults():
+def test_build_codex_config_toml_codex_login_defaults():
     from agentkit.toolkit.cli.sandbox import model_config
 
-    # openai provider, no --model-name / --model-base-url -> ChatGPT defaults, OAuth auth
-    toml = model_config.build_codex_config_toml("", model_provider="openai")
+    # codex_login provider, no --model-name / --model-base-url -> ChatGPT defaults, OAuth auth
+    toml = model_config.build_codex_config_toml("", model_provider="codex_login")
     assert "requires_openai_auth = true" in toml
     assert 'env_key = "CODEX_API_KEY"' not in toml
     assert f'base_url = "{model_config.CODEX_CHATGPT_BASE_URL}"' in toml
-    assert f'model = "{model_config.DEFAULT_OPENAI_AUTH_MODEL}"' in toml
-    assert model_config.provider_requires_openai_auth("openai") is True
+    assert f'model = "{model_config.DEFAULT_CODEX_LOGIN_MODEL}"' in toml
+    assert model_config.DEFAULT_CODEX_LOGIN_MODEL == "gpt-5.5"
+    assert model_config.provider_requires_openai_auth("codex_login") is True
+    assert model_config.provider_requires_openai_auth("openai") is False
 
 
 def test_build_codex_config_toml_volc_provider_keeps_api_key():
@@ -1130,6 +1392,41 @@ def test_build_create_tool_request_adds_default_model_base_url(monkeypatch):
         (
             "ANTHROPIC_BASE_URL",
             "https://ark.cn-beijing.volces.com/api/compatible",
+        ),
+        ("DISABLE_JUPYTER", "true"),
+        ("DISABLE_CODE_SERVER", "true"),
+        ("DISABLE_NODEJS_REPL", "true"),
+        ("BROWSER_EXTRA_ARGS", _DEFAULT_BROWSER_EXTRA_ARGS),
+    ]
+
+
+def test_build_create_tool_request_uses_byteplus_default_provider(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="SkillEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="ap-southeast-1",
+    )
+
+    assert [(item.key, item.value) for item in request.envs] == [
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "byteplus_model_square"),
+        ("OPENCODE_MODEL", "deepseek-v4-flash-260425"),
+        ("CODEX_MODEL", "deepseek-v4-flash-260425"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-flash-260425"),
+        ("OPENCODE_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/v3"),
+        ("CODEX_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/v3"),
+        ("MODEL_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/v3"),
+        (
+            "ANTHROPIC_BASE_URL",
+            "https://ark.ap-southeast.bytepluses.com/api/compatible",
         ),
         ("DISABLE_JUPYTER", "true"),
         ("DISABLE_CODE_SERVER", "true"),

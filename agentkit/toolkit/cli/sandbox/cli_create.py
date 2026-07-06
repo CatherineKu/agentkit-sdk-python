@@ -16,40 +16,33 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Any, NoReturn, Optional
 
 import typer
 
 from agentkit.platform import VolcConfiguration
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.sandbox.env_config import (
+    DEFAULT_CREATE_TOOL_TYPE,
+    PRIVATE_TOOL_COMMAND,
+    PRIVATE_TOOL_PORT,
+    PRIVATE_TOOL_TYPE,
+    build_create_tool_envs,
+    build_private_tool_envs,
+)
 from agentkit.toolkit.cli.sandbox.model_config import (
-    ANTHROPIC_BASE_URL_ENV_KEYS,
-    CODE_ENV_CODEX_HOME,
-    CODE_ENV_HOME,
-    CODEX_CONFIG_TOML_ENV,
-    CODEX_MODEL_CATALOG_JSON_ENV,
     ModelProviderType,
-    MODEL_API_KEY_ENV,
-    MODEL_API_KEY_ENV_KEYS,
-    MODEL_BASE_URL_ENV_KEYS,
-    MODEL_NAME_ENV_KEYS,
-    MODEL_PROVIDER_ENV,
     infer_model_provider_from_base_url,
     normalize_model_base_url,
     normalize_model_provider,
-    resolve_model_base_urls,
-    resolve_model_name,
-    should_emit_codex_model_catalog,
-    should_emit_codex_model_config,
-    validate_model_provider_base_url,
-    build_codex_config_toml as _shared_build_codex_config_toml,
-    build_codex_model_catalog_json as _shared_build_codex_model_catalog_json,
 )
-from agentkit.toolkit.cli.sandbox.tool_resolve import save_tool_result
+from agentkit.toolkit.cli.sandbox.tool_resolve import save_tool_result_if_resolvable
 from agentkit.toolkit.cli.sandbox.tos_config import (
     DEFAULT_TOS_LOCAL_PATH,
     build_create_tool_tos_mount_config,
@@ -63,26 +56,22 @@ from agentkit.utils.misc import generate_apikey_name, generate_random_id
 
 SANDBOX_REGION_ENV = "AGENTKIT_SANDBOX_REGION"
 SANDBOX_TOS_REGION_ENV = "AGENTKIT_SANDBOX_TOS_REGION"
-DEFAULT_CREATE_TOOL_TYPE = "CodeEnv"
 DEFAULT_CPU = 4
 VALID_CPU_VALUES = (2, 4, 8, 16)
+VALID_CREATE_TOOL_TYPES = ("CodeEnv", "SkillEnv", "Private")
 MEMORY_MB_PER_CPU = 2048
-DISABLED_SERVICE_ENV_KEYS = (
-    "DISABLE_JUPYTER",
-    "DISABLE_CODE_SERVER",
-    "DISABLE_NODEJS_REPL",
-)
-BROWSER_EXTRA_ARGS_ENV = "BROWSER_EXTRA_ARGS"
-DEFAULT_BROWSER_EXTRA_ARGS = (
-    "--enable-unsafe-swiftshader --use-gl=angle "
-    "--use-angle=swiftshader-webgl --ignore-gpu-blocklist"
-)
-WEB_SEARCH_API_KEY_ENV = "WEB_SEARCH_API_KEY"
 SKILL_ROLE_NAME_OPTION = "--skill-role-name"
 TOOL_READY_STATUS = "Ready"
 TOOL_FAILED_STATUSES = {"Error", "Failed", "CreateFailed", "Deleting", "Deleted"}
 TOOL_WAIT_INTERVAL_SECONDS = 5
 TOOL_WAIT_TIMEOUT_SECONDS = 600
+NETWORK_CONFIG_FIELDS = (
+    "private_access",
+    "public_access",
+    "vpc_id",
+    "subnet_ids",
+    "enable_shared_internet_access",
+)
 
 
 def _resolve_region(env_var_name: str, service_key: str) -> str:
@@ -106,143 +95,168 @@ def _validate_cpu(value: int) -> int:
     return value
 
 
+def _validate_tool_type(value: str) -> str:
+    resolved = value.strip() or DEFAULT_CREATE_TOOL_TYPE
+    if resolved not in VALID_CREATE_TOOL_TYPES:
+        allowed = ", ".join(VALID_CREATE_TOOL_TYPES)
+        error(f"--tool-type must be one of: {allowed}")
+    return resolved
+
+
 def _cpu_to_resource_shape(cpu: int) -> tuple[int, int]:
     resolved_cpu = _validate_cpu(cpu)
     return resolved_cpu * 1000, resolved_cpu * MEMORY_MB_PER_CPU
 
 
-def _append_tool_envs(
-    envs: list[tools_types.EnvsItemForCreateTool],
-    keys: tuple[str, ...],
-    value: Optional[str],
-) -> None:
-    resolved = (value or "").strip()
+def _network_config_error(message: str) -> NoReturn:
+    error(f"Invalid --network-config: {message}")
+
+
+def _load_network_config(value: str) -> dict[str, Any]:
+    raw = value.strip()
+    if not raw:
+        _network_config_error("value must not be empty")
+
+    if raw[0] in "{[":
+        source = "inline JSON"
+        content = raw
+    else:
+        path = Path(raw).expanduser()
+        source = str(path)
+        try:
+            content = path.read_text(encoding="utf-8")
+        except FileNotFoundError:
+            _network_config_error(f"file not found: {source}")
+        except OSError as exc:
+            _network_config_error(f"failed to read file {source}: {exc}")
+
+    try:
+        payload = json.loads(content)
+    except json.JSONDecodeError as exc:
+        _network_config_error(
+            f"{source} is not valid JSON at line {exc.lineno}, "
+            f"column {exc.colno}: {exc.msg}"
+        )
+
+    if not isinstance(payload, dict):
+        _network_config_error("expected a JSON object")
+    return payload
+
+
+def _get_network_bool(
+    payload: dict[str, Any],
+    field: str,
+    *,
+    default: bool,
+) -> bool:
+    if field not in payload or payload[field] is None:
+        return default
+    if not isinstance(payload[field], bool):
+        _network_config_error(f"{field} must be a boolean")
+    return payload[field]
+
+
+def _get_network_string(payload: dict[str, Any], field: str) -> Optional[str]:
+    if field not in payload or payload[field] is None:
+        return None
+    value = payload[field]
+    if not isinstance(value, str):
+        _network_config_error(f"{field} must be a string")
+    resolved = value.strip()
     if not resolved:
-        return
-
-    envs.extend(
-        tools_types.EnvsItemForCreateTool(Key=key, Value=resolved) for key in keys
-    )
+        _network_config_error(f"{field} must not be empty")
+    return resolved
 
 
-def _build_codex_config_toml(
-    model_name: str,
-    model_provider: str | ModelProviderType | None = None,
-    model_base_url: Optional[str] = None,
-) -> str:
-    return _shared_build_codex_config_toml(model_name, model_provider, model_base_url)
+def _get_network_string_list(
+    payload: dict[str, Any],
+    field: str,
+) -> Optional[list[str]]:
+    if field not in payload or payload[field] is None:
+        return None
+    value = payload[field]
+    if isinstance(value, str):
+        items = [item.strip() for item in value.split(",") if item.strip()]
+        if not items:
+            _network_config_error(f"{field} must contain at least one value")
+        return items
+    if not isinstance(value, list):
+        _network_config_error(f"{field} must be a string or an array of strings")
+    items = []
+    for index, item in enumerate(value):
+        if not isinstance(item, str):
+            _network_config_error(f"{field}[{index}] must be a string")
+        resolved = item.strip()
+        if not resolved:
+            _network_config_error(f"{field}[{index}] must not be empty")
+        items.append(resolved)
+    if not items:
+        _network_config_error(f"{field} must contain at least one value")
+    return items
 
 
-def _build_codex_model_catalog_json(
-    model_name: str,
-    model_provider: str | ModelProviderType | None = None,
-) -> str:
-    return _shared_build_codex_model_catalog_json(model_name, model_provider)
-
-
-def _append_code_env_tool_envs(
-    envs: list[tools_types.EnvsItemForCreateTool],
-    model_name: str,
-    model_provider: str | ModelProviderType | None,
-    model_base_url: Optional[str],
-    *,
-    include_codex_model_config: bool = True,
-) -> None:
-    code_envs = [
-        tools_types.EnvsItemForCreateTool(
-            Key="OPENCODE_DISABLE_AUTOUPDATE",
-            Value="1",
-        ),
-        tools_types.EnvsItemForCreateTool(
-            Key="HOME",
-            Value=CODE_ENV_HOME,
-        ),
-        tools_types.EnvsItemForCreateTool(
-            Key="CODEX_HOME",
-            Value=CODE_ENV_CODEX_HOME,
-        ),
-    ]
-    if include_codex_model_config:
-        code_envs.append(
-            tools_types.EnvsItemForCreateTool(
-                Key=CODEX_CONFIG_TOML_ENV,
-                Value=_build_codex_config_toml(
-                    model_name,
-                    model_provider,
-                    model_base_url,
-                ),
-            )
+def _build_network_configuration(
+    network_config: Optional[str] = None,
+) -> tools_types.NetworkForCreateTool:
+    if not network_config:
+        return tools_types.NetworkForCreateTool(
+            EnablePublicNetwork=True,
+            EnablePrivateNetwork=False,
         )
-        if should_emit_codex_model_catalog(model_provider):
-            code_envs.append(
-                tools_types.EnvsItemForCreateTool(
-                    Key=CODEX_MODEL_CATALOG_JSON_ENV,
-                    Value=_build_codex_model_catalog_json(model_name, model_provider),
-                )
-            )
-    envs.extend(code_envs)
 
-
-def _build_tool_model_envs(
-    *,
-    tool_type: str,
-    model_name: Optional[str] = None,
-    model_api_key: Optional[str] = None,
-    model_provider: str | ModelProviderType | None = None,
-    model_base_url: Optional[str] = None,
-    model_provider_was_provided: Optional[bool] = None,
-    model_base_url_was_provided: Optional[bool] = None,
-    websearch_apikey: Optional[str] = None,
-) -> list[tools_types.EnvsItemForCreateTool] | None:
-    envs: list[tools_types.EnvsItemForCreateTool] = []
-    validate_model_provider_base_url(
-        model_provider=model_provider,
-        model_base_url=model_base_url,
-        model_provider_was_provided=model_provider_was_provided,
-        model_base_url_was_provided=model_base_url_was_provided,
-    )
-    resolved_model_base_url = normalize_model_base_url(model_base_url)
-    effective_model_provider = model_provider or infer_model_provider_from_base_url(
-        resolved_model_base_url
-    )
-    resolved_model_provider = normalize_model_provider(effective_model_provider)
-    resolved_model_name = resolve_model_name(model_name, resolved_model_provider)
-    resolved_base_url, resolved_anthropic_base_url = resolve_model_base_urls(
-        model_provider=resolved_model_provider,
-        model_base_url=resolved_model_base_url,
-    )
-    resolved_model_api_key = model_api_key or os.getenv(MODEL_API_KEY_ENV)
-    _append_tool_envs(envs, (MODEL_PROVIDER_ENV,), resolved_model_provider)
-    _append_tool_envs(envs, MODEL_NAME_ENV_KEYS, resolved_model_name)
-    _append_tool_envs(envs, MODEL_API_KEY_ENV_KEYS, resolved_model_api_key)
-    _append_tool_envs(
-        envs,
-        MODEL_BASE_URL_ENV_KEYS,
-        resolved_base_url,
-    )
-    _append_tool_envs(
-        envs,
-        ANTHROPIC_BASE_URL_ENV_KEYS,
-        resolved_anthropic_base_url,
-    )
-    _append_tool_envs(envs, DISABLED_SERVICE_ENV_KEYS, "true")
-    _append_tool_envs(envs, (BROWSER_EXTRA_ARGS_ENV,), DEFAULT_BROWSER_EXTRA_ARGS)
-    _append_tool_envs(envs, (WEB_SEARCH_API_KEY_ENV,), websearch_apikey)
-    if tool_type.strip() == DEFAULT_CREATE_TOOL_TYPE:
-        _append_code_env_tool_envs(
-            envs,
-            resolved_model_name,
-            resolved_model_provider,
-            resolved_model_base_url,
-            include_codex_model_config=(
-                bool(resolved_model_name)
-                and should_emit_codex_model_config(
-                    model_provider=resolved_model_provider,
-                    model_base_url=resolved_model_base_url,
-                )
-            ),
+    payload = _load_network_config(network_config)
+    unknown_fields = sorted(set(payload) - set(NETWORK_CONFIG_FIELDS))
+    if unknown_fields:
+        allowed = ", ".join(NETWORK_CONFIG_FIELDS)
+        _network_config_error(
+            f"unsupported field {unknown_fields[0]!r}; allowed fields: {allowed}"
         )
-    return envs or None
+
+    private_access = _get_network_bool(
+        payload,
+        "private_access",
+        default=False,
+    )
+    public_access = _get_network_bool(payload, "public_access", default=True)
+    vpc_id = _get_network_string(payload, "vpc_id")
+    subnet_ids = _get_network_string_list(payload, "subnet_ids")
+    enable_shared_internet_access = _get_network_bool(
+        payload,
+        "enable_shared_internet_access",
+        default=False,
+    )
+
+    if not private_access and not public_access:
+        _network_config_error(
+            "private_access and public_access cannot both be false"
+        )
+    if private_access and not vpc_id:
+        _network_config_error("vpc_id is required when private_access is true")
+    if not private_access and any(
+        [
+            vpc_id,
+            subnet_ids,
+            payload.get("enable_shared_internet_access") is not None,
+        ]
+    ):
+        _network_config_error(
+            "vpc_id, subnet_ids, and enable_shared_internet_access require "
+            "private_access=true"
+        )
+
+    vpc_configuration = None
+    if private_access:
+        vpc_configuration = tools_types.NetworkVpcForCreateTool(
+            VpcId=vpc_id,
+            SubnetIds=subnet_ids,
+            EnableSharedInternetAccess=enable_shared_internet_access,
+        )
+
+    return tools_types.NetworkForCreateTool(
+        EnablePublicNetwork=public_access,
+        EnablePrivateNetwork=private_access,
+        VpcConfiguration=vpc_configuration,
+    )
 
 
 def _build_create_tool_request(
@@ -261,9 +275,38 @@ def _build_create_tool_request(
     model_base_url_was_provided: Optional[bool] = None,
     role_name: Optional[str] = None,
     websearch_apikey: Optional[str] = None,
+    image_url: Optional[str] = None,
+    network_config: Optional[str] = None,
 ) -> tools_types.CreateToolRequest:
-    resolved_tool_type = tool_type.strip() or DEFAULT_CREATE_TOOL_TYPE
+    resolved_tool_type = _validate_tool_type(tool_type)
     resolved_name = (name or "").strip() or _generate_tool_name(resolved_tool_type)
+    is_private_tool = resolved_tool_type == PRIVATE_TOOL_TYPE
+    if is_private_tool and not (image_url or "").strip():
+        error("--image-url is required when --tool-type Private")
+    command = PRIVATE_TOOL_COMMAND if is_private_tool else None
+    port = PRIVATE_TOOL_PORT if is_private_tool else None
+    envs = (
+        build_private_tool_envs(
+            model_name=model_name,
+            model_api_key=model_api_key,
+            model_provider=model_provider,
+            model_base_url=model_base_url,
+            model_provider_was_provided=model_provider_was_provided,
+            model_base_url_was_provided=model_base_url_was_provided,
+            websearch_apikey=websearch_apikey,
+        )
+        if is_private_tool
+        else build_create_tool_envs(
+            tool_type=resolved_tool_type,
+            model_name=model_name,
+            model_api_key=model_api_key,
+            model_provider=model_provider,
+            model_base_url=model_base_url,
+            model_provider_was_provided=model_provider_was_provided,
+            model_base_url_was_provided=model_base_url_was_provided,
+            websearch_apikey=websearch_apikey,
+        )
+    )
     tos_mount_config = build_create_tool_tos_mount_config(
         tos_bucket,
         tos_region,
@@ -276,6 +319,9 @@ def _build_create_tool_request(
     return tools_types.CreateToolRequest(
         Name=resolved_name,
         ToolType=resolved_tool_type,
+        Command=command,
+        ImageUrl=(image_url or "").strip() or None,
+        Port=port,
         CpuMilli=cpu_milli,
         MemoryMb=memory_mb,
         RoleName=role_name,
@@ -285,21 +331,9 @@ def _build_create_tool_request(
                 ApiKeyLocation="Header",
             )
         ),
-        NetworkConfiguration=tools_types.NetworkForCreateTool(
-            EnablePublicNetwork=True,
-            EnablePrivateNetwork=False,
-        ),
+        NetworkConfiguration=_build_network_configuration(network_config),
         TosMountConfig=tos_mount_config,
-        Envs=_build_tool_model_envs(
-            tool_type=resolved_tool_type,
-            model_name=model_name,
-            model_api_key=model_api_key,
-            model_provider=model_provider,
-            model_base_url=model_base_url,
-            model_provider_was_provided=model_provider_was_provided,
-            model_base_url_was_provided=model_base_url_was_provided,
-            websearch_apikey=websearch_apikey,
-        ),
+        Envs=envs,
     )
 
 
@@ -473,6 +507,8 @@ def create_tool(
     skill_role_name: Optional[str] = None,
     skill_role_name_provided: bool = False,
     websearch_apikey: Optional[str] = None,
+    image_url: Optional[str] = None,
+    network_config: Optional[str] = None,
 ) -> dict[str, object]:
     resolved_model_base_url = normalize_model_base_url(model_base_url)
     raw_model_provider = (
@@ -512,6 +548,8 @@ def create_tool(
         model_base_url_was_provided=bool(resolved_model_base_url),
         role_name=resolved_role_name,
         websearch_apikey=resolved_websearch_apikey,
+        image_url=image_url,
+        network_config=network_config,
     )
     client = AgentkitToolsClient(
         region=region,
@@ -602,6 +640,20 @@ def create_command(
             "Use --disable-websearch-apikey in exec to disable it per session."
         ),
     ),
+    image_url: Optional[str] = typer.Option(
+        None,
+        "--image-url",
+        help="Custom image URL. Required when --tool-type Private.",
+    ),
+    network_config: Optional[str] = typer.Option(
+        None,
+        "--network-config",
+        help=(
+            "Network config as inline JSON or a JSON file path. Fields: "
+            "private_access=false, public_access=true, vpc_id, subnet_ids, "
+            "enable_shared_internet_access. private_access=true requires vpc_id."
+        ),
+    ),
 ) -> None:
     """Create an AgentKit Tool with optional TOS mount.
 
@@ -627,8 +679,10 @@ def create_command(
             skill_role_name=skill_role_name,
             skill_role_name_provided=skill_role_name_provided,
             websearch_apikey=websearch_apikey,
+            image_url=image_url,
+            network_config=network_config,
         )
-        save_tool_result(str(result["tool_type"]), result)
+        save_tool_result_if_resolvable(str(result["tool_type"]), result)
     except (typer.Abort, typer.Exit):
         raise
     except Exception as exc:

@@ -25,6 +25,12 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _clear_cloud_provider_env(monkeypatch):
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+
+
 class _FakeCreateSessionResponse:
     user_session_id = "user-session-from-api"
     session_id = "session-from-api"
@@ -248,6 +254,38 @@ def _patch_shell_session(monkeypatch, cli_shell, session, capture=None):
     )
 
 
+class _FakeA2AResponse:
+    def __init__(self, payload, status_code=200, text=None):
+        self._payload = payload
+        self.status_code = status_code
+        self.text = text if text is not None else json.dumps(payload)
+
+    def json(self):
+        return self._payload
+
+
+def _patch_invoke_session(monkeypatch, cli_invoke, session, capture=None):
+    def fake_ensure_sandbox_session(session_id=None, tool_id=None, **kwargs):
+        if capture is not None:
+            capture["session_id"] = session_id
+            capture["tool_id"] = tool_id
+            capture.update(kwargs)
+        result = dict(session)
+        result.setdefault("tool_id", tool_id)
+        return result
+
+    monkeypatch.setattr(
+        cli_invoke,
+        "ensure_sandbox_session",
+        fake_ensure_sandbox_session,
+    )
+
+
+def _clear_model_agent_envs(monkeypatch, cli_invoke):
+    for key in cli_invoke.MODEL_AGENT_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+
 def test_ensure_sandbox_session_uses_env_defaults(monkeypatch, tmp_path) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
 
@@ -314,6 +352,73 @@ def test_ensure_sandbox_session_uses_cached_tool_by_type(
     assert _FakeToolsClient.last_request.tool_id == "tool-from-cache"
     assert _FakeToolsClient.get_tool_call_count == 2
     assert _FakeToolsClient.last_get_tool_request.tool_id == "tool-from-cache"
+
+
+def test_ensure_sandbox_session_can_skip_tool_lookup_for_resolved_tool_id(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+
+    session_create.ensure_sandbox_session(
+        tool_id="SkillEnv",
+        tool_type="SkillEnv",
+        resolve_tool=False,
+        include_tos_mount_points=False,
+    )
+
+    assert _FakeToolsClient.get_tool_call_count == 0
+    assert _FakeToolsClient.last_request.tool_id == "SkillEnv"
+
+
+def test_ensure_sandbox_session_skip_tool_lookup_syncs_named_remote_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-1",
+                    session_id="instance-1",
+                    endpoint="https://sandbox.example.com/a2a",
+                )
+            ]
+        )
+    ]
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-1",
+        tool_id="SkillEnv",
+        tool_type="SkillEnv",
+        resolve_tool=False,
+        include_tos_mount_points=False,
+    )
+
+    assert _FakeToolsClient.get_tool_call_count == 0
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.list_sessions_call_count == 1
+    assert result == {
+        "session_id": "user-1",
+        "tool_id": "SkillEnv",
+        "instance_id": "instance-1",
+        "endpoint": "https://sandbox.example.com/a2a",
+    }
 
 
 def test_ensure_sandbox_session_rejects_unavailable_cached_tool(
@@ -389,6 +494,59 @@ def test_cli_exec_reports_missing_explicit_tool_id(
     assert "Sandbox tool not found: tool-missing" in result.output
     assert "The specified resource does not exist." in result.output
     assert _FakeToolsClient.create_call_count == 0
+
+
+def test_cli_exec_allows_private_tool_id_during_websearch_check(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-private",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _patch_exec_session(monkeypatch, cli_exec, stored_session)
+    monkeypatch.setattr(
+        tool_resolve,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-private",
+        tool_type="Private",
+        status="Ready",
+    )
+    captured = {}
+
+    def fake_connect(ws_url, initial_command, on_shell_id=None):
+        captured["ws_url"] = ws_url
+        captured["initial_command"] = initial_command
+
+    monkeypatch.setattr(cli_exec, "_connect_terminal", fake_connect)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--tool-id",
+            "tool-private",
+            "--model-api-key",
+            "model-value",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws?token=abc"
+    assert captured["initial_command"] is None
+    assert _FakeToolsClient.get_tool_call_count == 1
 
 
 def test_cli_shell_reports_raw_get_tool_not_found_response(
@@ -647,6 +805,62 @@ def test_ensure_sandbox_session_creates_tool_when_no_tool_exists(
     }
 
 
+def test_save_tool_result_omits_model_base_url_fields(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    tool_store_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_store_path.write_text(
+        json.dumps(
+            {
+                "SkillEnv": {
+                    "ToolId": "tool-old",
+                    "ToolType": "SkillEnv",
+                    "Name": "old-tool",
+                    "Status": "Ready",
+                    "ModelBaseUrl": "https://models.example.com/v1",
+                    "AnthropicBaseUrl": "https://models.example.com/v1",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    tool_resolve.save_tool_result(
+        "CodeEnv",
+        {
+            "ToolId": "tool-new",
+            "ToolType": "CodeEnv",
+            "Name": "new-tool",
+            "Status": "Ready",
+            "ModelProvider": "model_square",
+            "ModelBaseUrl": "https://models.example.com/v1",
+            "AnthropicBaseUrl": "https://models.example.com/v1",
+        },
+    )
+
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "SkillEnv": {
+            "ToolId": "tool-old",
+            "ToolType": "SkillEnv",
+            "Name": "old-tool",
+            "Status": "Ready",
+            "ModelBaseUrl": "https://models.example.com/v1",
+            "AnthropicBaseUrl": "https://models.example.com/v1",
+        },
+        "CodeEnv": {
+            "ToolId": "tool-new",
+            "Name": "new-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
+            "ModelProvider": "model_square",
+        },
+    }
+
+
 def test_ensure_sandbox_session_options_override_env(monkeypatch, tmp_path) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
 
@@ -815,6 +1029,7 @@ def test_build_model_envs_renames_reserved_codex_provider(monkeypatch) -> None:
 
     envs = session_create.build_model_envs(
         model_name="custom-model",
+        model_api_key="sk-openai",
         model_provider="openai",
         model_base_url="https://models.example.com/v1",
         include_codex_config=True,
@@ -826,6 +1041,30 @@ def test_build_model_envs_renames_reserved_codex_provider(monkeypatch) -> None:
     assert "[model_providers.openai-custom]" in env_map["CODEX_CONFIG_TOML"]
     assert 'name = "openai-custom"' in env_map["CODEX_CONFIG_TOML"]
     assert "[model_providers.openai]" not in env_map["CODEX_CONFIG_TOML"]
+    assert "model_catalog_json" not in env_map["CODEX_CONFIG_TOML"]
+    assert "CODEX_MODEL_CATALOG_JSON" not in env_map
+    assert 'env_key = "CODEX_API_KEY"' in env_map["CODEX_CONFIG_TOML"]
+    assert "requires_openai_auth" not in env_map["CODEX_CONFIG_TOML"]
+    assert env_map["CODEX_API_KEY"] == "sk-openai"
+
+
+def test_build_model_envs_codex_login_uses_chatgpt_auth(monkeypatch) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+
+    envs = session_create.build_model_envs(
+        model_provider="codex_login",
+        include_codex_config=True,
+    )
+    env_map = {item.key: item.value for item in envs}
+
+    assert env_map["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "codex_login"
+    assert env_map["CODEX_MODEL"] == "gpt-5.5"
+    assert 'model_provider = "codex_login"' in env_map["CODEX_CONFIG_TOML"]
+    assert 'model = "gpt-5.5"' in env_map["CODEX_CONFIG_TOML"]
+    assert "requires_openai_auth = true" in env_map["CODEX_CONFIG_TOML"]
+    assert 'env_key = "CODEX_API_KEY"' not in env_map["CODEX_CONFIG_TOML"]
     assert "model_catalog_json" not in env_map["CODEX_CONFIG_TOML"]
     assert "CODEX_MODEL_CATALOG_JSON" not in env_map
 
@@ -924,6 +1163,83 @@ def test_build_model_envs_infers_provider_from_builtin_model_base_url(
     assert (
         'base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"' in envs[8].value
     )
+
+
+def test_build_model_envs_infers_byteplus_provider_from_builtin_model_base_url(
+    monkeypatch,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+
+    envs = session_create.build_model_envs(
+        model_base_url="https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        include_codex_config=True,
+    )
+
+    assert [(item.key, item.value) for item in envs] == [
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "byteplus_coding_plan"),
+        ("OPENCODE_MODEL", "deepseek-v4-flash"),
+        ("CODEX_MODEL", "deepseek-v4-flash"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-flash"),
+        (
+            "OPENCODE_BASE_URL",
+            "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        ),
+        ("CODEX_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/coding/v3"),
+        ("MODEL_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/coding/v3"),
+        (
+            "ANTHROPIC_BASE_URL",
+            "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        ),
+        (
+            "CODEX_CONFIG_TOML",
+            envs[8].value,
+        ),
+        (
+            "CODEX_MODEL_CATALOG_JSON",
+            envs[9].value,
+        ),
+    ]
+    assert 'model_provider = "byteplus_coding_plan"' in envs[8].value
+    assert (
+        'base_url = "https://ark.ap-southeast.bytepluses.com/api/coding/v3"'
+        in envs[8].value
+    )
+
+
+def test_build_model_envs_uses_byteplus_default_provider_for_codex_config(
+    monkeypatch,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+
+    envs = session_create.build_model_envs(
+        model_name="glm-5.2",
+        include_codex_config=True,
+    )
+    env_map = {item.key: item.value for item in envs}
+
+    assert list(env_map) == [
+        "OPENCODE_MODEL",
+        "CODEX_MODEL",
+        "ANTHROPIC_MODEL",
+        "CODEX_CONFIG_TOML",
+        "CODEX_MODEL_CATALOG_JSON",
+    ]
+    assert env_map["CODEX_MODEL"] == "glm-5.2"
+    assert 'model_provider = "byteplus_model_square"' in env_map["CODEX_CONFIG_TOML"]
+    assert "[model_providers.byteplus_model_square]" in env_map["CODEX_CONFIG_TOML"]
+    assert (
+        'base_url = "https://ark.ap-southeast.bytepluses.com/api/v3"'
+        in env_map["CODEX_CONFIG_TOML"]
+    )
+    catalog = json.loads(env_map["CODEX_MODEL_CATALOG_JSON"])
+    models = {model["slug"] for model in catalog["models"]}
+    assert "deepseek-v4-flash-260425" in models
 
 
 def test_ensure_sandbox_session_skips_tos_mount_when_tool_has_none(
@@ -1207,6 +1523,7 @@ def test_sandbox_command_group_is_registered() -> None:
     assert "create" in result.output
     assert "exec" in result.output
     assert "get" in result.output
+    assert "invoke" in result.output
     assert "mount" in result.output
     assert "shell" in result.output
     assert "web" in result.output
@@ -1219,6 +1536,7 @@ def test_sandbox_command_group_is_registered() -> None:
         ["sandbox", "shell", "--help"],
         ["sandbox", "web", "--help"],
         ["sandbox", "exec", "--help"],
+        ["sandbox", "invoke", "--help"],
         ["sandbox", "mount", "--help"],
     ],
 )
@@ -1244,6 +1562,427 @@ def test_sandbox_shell_id_option_is_disabled(args) -> None:
 
     assert result.exit_code == 0
     assert "--shell-id" not in result.output
+
+
+def test_build_invoke_model_agent_envs_uses_cli_values_first(
+    monkeypatch,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    monkeypatch.setenv("MODEL_AGENT_NAME", "env-model")
+    monkeypatch.setenv("MODEL_AGENT_PROVIDER", "env-provider")
+    monkeypatch.setenv("MODEL_AGENT_API_BASE", "https://env.example.com")
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "env-key")
+    monkeypatch.setenv("MODEL_AGENT_EXTRA_HEADERS", '{"X-Env":"1"}')
+
+    envs = cli_invoke.build_invoke_model_agent_envs(
+        model_name="cli-model",
+        model_provider="cli-provider",
+        model_base_url="https://cli.example.com",
+        model_api_key="cli-key",
+    )
+
+    assert {item.key: item.value for item in envs} == {
+        "MODEL_AGENT_API_BASE": "https://cli.example.com",
+        "MODEL_AGENT_API_KEY": "cli-key",
+        "MODEL_AGENT_PROVIDER": "cli-provider",
+        "MODEL_AGENT_NAME": "cli-model",
+        "MODEL_AGENT_EXTRA_HEADERS": '{"X-Env":"1"}',
+    }
+
+
+def test_build_invoke_model_agent_envs_uses_env_values(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    monkeypatch.setenv("MODEL_AGENT_NAME", "env-model")
+    monkeypatch.setenv("MODEL_AGENT_PROVIDER", "env-provider")
+    monkeypatch.setenv("MODEL_AGENT_API_BASE", "https://env.example.com")
+    monkeypatch.setenv("MODEL_AGENT_API_KEY", "env-key")
+    monkeypatch.setenv("MODEL_AGENT_EXTRA_HEADERS", '{"X-Env":"1"}')
+
+    envs = cli_invoke.build_invoke_model_agent_envs(
+        openclaw_config_file=tmp_path / "missing-openclaw.json",
+    )
+
+    assert {item.key: item.value for item in envs} == {
+        "MODEL_AGENT_API_BASE": "https://env.example.com",
+        "MODEL_AGENT_API_KEY": "env-key",
+        "MODEL_AGENT_PROVIDER": "env-provider",
+        "MODEL_AGENT_NAME": "env-model",
+        "MODEL_AGENT_EXTRA_HEADERS": '{"X-Env":"1"}',
+    }
+
+
+def test_build_invoke_model_agent_envs_uses_openclaw_config(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    _clear_model_agent_envs(monkeypatch, cli_invoke)
+    openclaw_path = tmp_path / "openclaw.json"
+    openclaw_path.write_text(
+        json.dumps(
+            {
+                "agents": {"defaults": {"model": {"primary": "provider-a/model-a"}}},
+                "models": {
+                    "provider-a": {
+                        "api_base": "https://openclaw.example.com",
+                        "api_key": "openclaw-key",
+                        "api": "openai-responses",
+                        "headers": {"X-Provider": "provider"},
+                        "models": {
+                            "model-a": {
+                                "headers": {"X-Model": "model"},
+                            }
+                        },
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    envs = cli_invoke.build_invoke_model_agent_envs(
+        openclaw_config_file=openclaw_path,
+    )
+
+    assert {item.key: item.value for item in envs} == {
+        "MODEL_AGENT_API_BASE": "https://openclaw.example.com",
+        "MODEL_AGENT_API_KEY": "openclaw-key",
+        "MODEL_AGENT_PROVIDER": "openai/responses",
+        "MODEL_AGENT_NAME": "model-a",
+        "MODEL_AGENT_EXTRA_HEADERS": '{"X-Model": "model", "X-Provider": "provider"}',
+    }
+
+
+def test_build_invoke_model_agent_envs_uses_empty_required_values(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    _clear_model_agent_envs(monkeypatch, cli_invoke)
+
+    envs = cli_invoke.build_invoke_model_agent_envs(
+        openclaw_config_file=tmp_path / "missing-openclaw.json",
+    )
+
+    assert [(item.key, item.value) for item in envs] == [
+        ("MODEL_AGENT_API_BASE", ""),
+        ("MODEL_AGENT_API_KEY", ""),
+        ("MODEL_AGENT_PROVIDER", ""),
+        ("MODEL_AGENT_NAME", ""),
+    ]
+
+
+def test_cli_invoke_async_uses_env_tool_id_and_sends_a2a(
+    monkeypatch,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.a2a_client as a2a_client
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    _clear_model_agent_envs(monkeypatch, cli_invoke)
+    monkeypatch.setenv("AGENTKIT_SANDBOX_TOOL_ID", "tool-env")
+    capture = {}
+    _patch_invoke_session(
+        monkeypatch,
+        cli_invoke,
+        {
+            "session_id": "session-cli",
+            "instance_id": "instance-cli",
+            "endpoint": "https://sandbox.example.com/base?Authorization=token",
+        },
+        capture,
+    )
+    calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return _FakeA2AResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "rpc-1",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "contextId": "context-1",
+                    "status": {"state": "working"},
+                },
+            }
+        )
+
+    monkeypatch.setattr(a2a_client.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "invoke",
+            "--session-id",
+            "session-cli",
+            "--prompt",
+            "hello",
+            "--async",
+            "true",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert capture["session_id"] == "session-cli"
+    assert capture["tool_id"] == "tool-env"
+    assert capture["tool_type"] == "SkillEnv"
+    assert capture["ttl"] is None
+    assert capture["resolve_tool"] is False
+    assert capture["include_tos_mount_points"] is False
+    assert [(item.key, item.value) for item in capture["envs"]] == [
+        ("MODEL_AGENT_API_BASE", ""),
+        ("MODEL_AGENT_API_KEY", ""),
+        ("MODEL_AGENT_PROVIDER", ""),
+        ("MODEL_AGENT_NAME", ""),
+    ]
+    assert len(calls) == 1
+    call = calls[0]
+    assert call["url"] == "https://sandbox.example.com/base/a2a?Authorization=token"
+    assert call["json"]["method"] == "message/send"
+    assert call["json"]["params"]["message"]["parts"] == [
+        {"kind": "text", "text": "hello"}
+    ]
+    assert call["json"]["params"]["metadata"] == {
+        "session_id": "session-cli",
+        "user_id": "agentkit-sandbox-invoke",
+    }
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "task-1"
+    assert payload["context_id"] == "context-1"
+    assert payload["session_id"] == "session-cli"
+    assert payload["tool_id"] == "tool-env"
+
+
+def test_cli_invoke_sync_falls_back_to_tool_type_and_polls(
+    monkeypatch,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.a2a_client as a2a_client
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    _clear_model_agent_envs(monkeypatch, cli_invoke)
+    monkeypatch.delenv("AGENTKIT_SANDBOX_TOOL_ID", raising=False)
+    capture = {}
+    _patch_invoke_session(
+        monkeypatch,
+        cli_invoke,
+        {
+            "session_id": "generated-session",
+            "instance_id": "instance-cli",
+            "endpoint": "https://sandbox.example.com",
+        },
+        capture,
+    )
+    calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        method = json["method"]
+        if method == "message/send":
+            return _FakeA2AResponse(
+                {
+                    "jsonrpc": "2.0",
+                    "id": "rpc-send",
+                    "result": {
+                        "kind": "task",
+                        "id": "task-sync",
+                        "contextId": "context-sync",
+                        "status": {"state": "working"},
+                    },
+                }
+            )
+        return _FakeA2AResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "rpc-get",
+                "result": {
+                    "kind": "task",
+                    "id": "task-sync",
+                    "contextId": "context-sync",
+                    "status": {"state": "completed"},
+                    "artifacts": [
+                        {"parts": [{"kind": "text", "text": "done"}]},
+                    ],
+                },
+            }
+        )
+
+    monkeypatch.setattr(a2a_client.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        ["sandbox", "invoke", "--prompt", "run it", "--ttl", "123"],
+    )
+
+    assert result.exit_code == 0
+    assert capture["session_id"] is None
+    assert capture["tool_id"] == "SkillEnv"
+    assert capture["tool_type"] == "SkillEnv"
+    assert capture["ttl"] == 123
+    assert capture["resolve_tool"] is False
+    assert capture["include_tos_mount_points"] is False
+    assert [(item.key, item.value) for item in capture["envs"]] == [
+        ("MODEL_AGENT_API_BASE", ""),
+        ("MODEL_AGENT_API_KEY", ""),
+        ("MODEL_AGENT_PROVIDER", ""),
+        ("MODEL_AGENT_NAME", ""),
+    ]
+    assert [call["json"]["method"] for call in calls] == [
+        "message/send",
+        "tasks/get",
+    ]
+    assert calls[1]["json"]["params"]["id"] == "task-sync"
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["task_state"] == "completed"
+    assert payload["final_result"] == "done"
+    assert payload["task_id"] == "task-sync"
+
+
+def test_cli_invoke_passes_model_agent_envs_from_options(
+    monkeypatch,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.a2a_client as a2a_client
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    _clear_model_agent_envs(monkeypatch, cli_invoke)
+    capture = {}
+    _patch_invoke_session(
+        monkeypatch,
+        cli_invoke,
+        {
+            "session_id": "session-cli",
+            "instance_id": "instance-cli",
+            "endpoint": "https://sandbox.example.com",
+        },
+        capture,
+    )
+
+    monkeypatch.setattr(
+        a2a_client.requests,
+        "post",
+        lambda *_args, **_kwargs: _FakeA2AResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "rpc-1",
+                "result": {
+                    "kind": "task",
+                    "id": "task-1",
+                    "status": {"state": "working"},
+                },
+            }
+        ),
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "invoke",
+            "--prompt",
+            "hello",
+            "--async",
+            "--model-name",
+            "model-cli",
+            "--model-provider",
+            "provider-cli",
+            "--model-base-url",
+            "https://models.example.com",
+            "--model-api-key",
+            "key-cli",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert {item.key: item.value for item in capture["envs"]} == {
+        "MODEL_AGENT_API_BASE": "https://models.example.com",
+        "MODEL_AGENT_API_KEY": "key-cli",
+        "MODEL_AGENT_PROVIDER": "provider-cli",
+        "MODEL_AGENT_NAME": "model-cli",
+    }
+
+
+def test_cli_invoke_task_id_polls_without_prompt(
+    monkeypatch,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.a2a_client as a2a_client
+    import agentkit.toolkit.cli.sandbox.cli_invoke as cli_invoke
+
+    capture = {}
+    _patch_invoke_session(
+        monkeypatch,
+        cli_invoke,
+        {
+            "session_id": "session-cli",
+            "instance_id": "instance-cli",
+            "endpoint": "https://sandbox.example.com",
+        },
+        capture,
+    )
+    calls = []
+
+    def fake_post(url, json=None, timeout=None):
+        calls.append({"url": url, "json": json, "timeout": timeout})
+        return _FakeA2AResponse(
+            {
+                "jsonrpc": "2.0",
+                "id": "rpc-get",
+                "result": {
+                    "kind": "task",
+                    "id": "task-existing",
+                    "status": {"state": "completed"},
+                    "artifacts": [
+                        {"parts": [{"kind": "text", "text": "existing result"}]},
+                    ],
+                },
+            }
+        )
+
+    monkeypatch.setattr(a2a_client.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "invoke",
+            "--sid",
+            "session-cli",
+            "--task-id",
+            "task-existing",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert capture["session_id"] == "session-cli"
+    assert len(calls) == 1
+    assert calls[0]["json"]["method"] == "tasks/get"
+    assert calls[0]["json"]["params"]["id"] == "task-existing"
+    payload = json.loads(result.output)
+    assert payload["ok"] is True
+    assert payload["task_id"] == "task-existing"
+    assert payload["final_result"] == "existing result"
+
+
+def test_cli_invoke_requires_prompt_without_task_id() -> None:
+    from agentkit.toolkit.cli.cli import app
+
+    result = runner.invoke(app, ["sandbox", "invoke"])
+
+    assert result.exit_code == 1
+    assert "--prompt is required unless --task-id is provided" in result.output
 
 
 def test_sandbox_exec_tos_mount_option_is_disabled() -> None:
@@ -4407,7 +5146,7 @@ def test_cli_exec_model_name_uses_cached_tool_model_provider(
     )
 
 
-def test_cli_exec_model_name_inherits_cached_custom_model_base_url(
+def test_cli_exec_model_name_ignores_cached_custom_model_base_url(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -4475,15 +5214,20 @@ def test_cli_exec_model_name_inherits_cached_custom_model_base_url(
     envs = {item.key: item.value for item in captured_session["envs"]}
     assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "model_square"
     assert envs["CODEX_MODEL"] == "custom-model"
-    assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
-    assert envs["ANTHROPIC_BASE_URL"] == "https://models.example.com/v1"
+    assert envs["CODEX_BASE_URL"] == "https://ark.cn-beijing.volces.com/api/v3"
+    assert envs["ANTHROPIC_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/compatible"
+    )
     assert 'model_provider = "model_square"' in envs["CODEX_CONFIG_TOML"]
     assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
-    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
     assert "CODEX_MODEL_CATALOG_JSON" in envs
 
 
-def test_cli_exec_model_name_inherits_default_cached_custom_model_base_url(
+def test_cli_exec_model_name_ignores_default_cached_custom_model_base_url(
     monkeypatch,
     tmp_path,
 ) -> None:
@@ -4543,11 +5287,16 @@ def test_cli_exec_model_name_inherits_default_cached_custom_model_base_url(
     assert captured_session["tool_id"] is None
     assert envs["AGENTKIT_SANDBOX_MODEL_PROVIDER"] == "model_square"
     assert envs["CODEX_MODEL"] == "custom-model"
-    assert envs["CODEX_BASE_URL"] == "https://models.example.com/v1"
-    assert envs["ANTHROPIC_BASE_URL"] == "https://models.example.com/v1"
+    assert envs["CODEX_BASE_URL"] == "https://ark.cn-beijing.volces.com/api/v3"
+    assert envs["ANTHROPIC_BASE_URL"] == (
+        "https://ark.cn-beijing.volces.com/api/compatible"
+    )
     assert 'model_provider = "model_square"' in envs["CODEX_CONFIG_TOML"]
     assert 'model = "custom-model"' in envs["CODEX_CONFIG_TOML"]
-    assert 'base_url = "https://models.example.com/v1"' in envs["CODEX_CONFIG_TOML"]
+    assert (
+        'base_url = "https://ark.cn-beijing.volces.com/api/v3"'
+        in envs["CODEX_CONFIG_TOML"]
+    )
     assert "CODEX_MODEL_CATALOG_JSON" in envs
 
 
