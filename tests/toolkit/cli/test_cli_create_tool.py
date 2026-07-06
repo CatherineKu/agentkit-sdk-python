@@ -44,6 +44,12 @@ def _use_tool_store_path(tool_store_path):
     pass
 
 
+@pytest.fixture(autouse=True)
+def _clear_cloud_provider_env(monkeypatch):
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+
+
 class _FakeCreateToolResponse:
     tool_id = "t-created"
 
@@ -600,8 +606,7 @@ def test_build_create_tool_request_adds_private_defaults(monkeypatch):
     assert request.tos_mount_config is None
     env_map = {item.key: item.value for item in request.envs}
     assert [
-        (item.key, item.value)
-        for item in request.envs[: len(PRIVATE_TOOL_VARS)]
+        (item.key, item.value) for item in request.envs[: len(PRIVATE_TOOL_VARS)]
     ] == list(PRIVATE_TOOL_VARS)
     env_keys = set(env_map)
     assert "ABC" not in env_keys
@@ -1240,6 +1245,41 @@ def test_build_create_tool_request_adds_default_model_base_url(monkeypatch):
         (
             "ANTHROPIC_BASE_URL",
             "https://ark.cn-beijing.volces.com/api/compatible",
+        ),
+        ("DISABLE_JUPYTER", "true"),
+        ("DISABLE_CODE_SERVER", "true"),
+        ("DISABLE_NODEJS_REPL", "true"),
+        ("BROWSER_EXTRA_ARGS", _DEFAULT_BROWSER_EXTRA_ARGS),
+    ]
+
+
+def test_build_create_tool_request_uses_byteplus_default_provider(monkeypatch):
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    request = cli_create._build_create_tool_request(
+        tool_type="SkillEnv",
+        name="demo-tool",
+        tos_bucket="my-bucket",
+        tos_region="ap-southeast-1",
+    )
+
+    assert [(item.key, item.value) for item in request.envs] == [
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "byteplus_model_square"),
+        ("OPENCODE_MODEL", "deepseek-v4-flash-260425"),
+        ("CODEX_MODEL", "deepseek-v4-flash-260425"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-flash-260425"),
+        ("OPENCODE_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/v3"),
+        ("CODEX_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/v3"),
+        ("MODEL_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/v3"),
+        (
+            "ANTHROPIC_BASE_URL",
+            "https://ark.ap-southeast.bytepluses.com/api/compatible",
         ),
         ("DISABLE_JUPYTER", "true"),
         ("DISABLE_CODE_SERVER", "true"),

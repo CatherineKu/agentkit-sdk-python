@@ -56,6 +56,8 @@ class ModelProviderType(str, Enum):
     MODEL_SQUARE = "model_square"
     CODING_PLAN = "coding_plan"
     AGENT_PLAN = "agent_plan"
+    BYTEPLUS_MODEL_SQUARE = "byteplus_model_square"
+    BYTEPLUS_CODING_PLAN = "byteplus_coding_plan"
 
 
 @dataclass(frozen=True)
@@ -75,6 +77,7 @@ class ModelProviderConfig:
 DEFAULT_MODEL_CONTEXT_WINDOW = 1000000
 LIMITED_MODEL_CONTEXT_WINDOW = 200000
 DEFAULT_MODEL_PROVIDER = ModelProviderType.MODEL_SQUARE.value
+BYTEPLUS_DEFAULT_MODEL_PROVIDER = ModelProviderType.BYTEPLUS_MODEL_SQUARE.value
 
 MODEL_PROVIDER_CONFIGS: dict[str, ModelProviderConfig] = {
     ModelProviderType.MODEL_SQUARE.value: ModelProviderConfig(
@@ -134,6 +137,44 @@ MODEL_PROVIDER_CONFIGS: dict[str, ModelProviderConfig] = {
             ),
         },
     ),
+    ModelProviderType.BYTEPLUS_MODEL_SQUARE.value: ModelProviderConfig(
+        model_base_url="https://ark.ap-southeast.bytepluses.com/api/v3",
+        anthropic_base_url="https://ark.ap-southeast.bytepluses.com/api/compatible",
+        default_model_name="deepseek-v4-flash-260425",
+        models={
+            "doubao-seed-2-0-pro-260215": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=LIMITED_MODEL_CONTEXT_WINDOW,
+            ),
+            "deepseek-v4-flash-260425": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+            "deepseek-v4-pro-260425": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=DEFAULT_MODEL_CONTEXT_WINDOW,
+            ),
+        },
+    ),
+    ModelProviderType.BYTEPLUS_CODING_PLAN.value: ModelProviderConfig(
+        model_base_url="https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        anthropic_base_url="https://ark.ap-southeast.bytepluses.com/api/coding",
+        default_model_name="dola-seed-2.0-pro",
+        models={
+            "dola-seed-2.0-pro": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=LIMITED_MODEL_CONTEXT_WINDOW,
+            ),
+            "dola-seed-2.0-lite": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=LIMITED_MODEL_CONTEXT_WINDOW,
+            ),
+            "dola-seed-2.0-code": ModelSpec(
+                supports_reasoning_summaries=True,
+                context_window=LIMITED_MODEL_CONTEXT_WINDOW,
+            ),
+        },
+    ),
 }
 
 DEFAULT_MODEL_NAME = MODEL_PROVIDER_CONFIGS[DEFAULT_MODEL_PROVIDER].default_model_name
@@ -166,10 +207,29 @@ def _model_provider_value(
     return model_provider
 
 
+def default_model_provider() -> str:
+    try:
+        from agentkit.platform.provider import (
+            CloudProvider,
+            normalize_cloud_provider,
+            read_cloud_provider_from_env,
+        )
+
+        if normalize_cloud_provider(read_cloud_provider_from_env()) == (
+            CloudProvider.BYTEPLUS
+        ):
+            return BYTEPLUS_DEFAULT_MODEL_PROVIDER
+    except Exception:
+        pass
+    return DEFAULT_MODEL_PROVIDER
+
+
 def normalize_model_provider(
     model_provider: str | ModelProviderType | None,
 ) -> str:
-    resolved = (_model_provider_value(model_provider) or DEFAULT_MODEL_PROVIDER).strip()
+    resolved = (
+        _model_provider_value(model_provider) or default_model_provider()
+    ).strip()
     return resolved
 
 
@@ -333,18 +393,12 @@ def build_codex_config_toml(
     requires_openai_auth = provider_requires_openai_auth(resolved_provider)
     config = get_model_provider_config_if_known(resolved_provider)
     resolved_model_base_url = normalize_model_base_url(model_base_url)
-    if requires_openai_auth:
-        # ChatGPT-subscription provider: default to codex's built-in ChatGPT endpoint (or the
-        # caller's --model-base-url, e.g. a regional proxy) and a ChatGPT model.
-        provider_base_url = resolved_model_base_url or CODEX_CHATGPT_BASE_URL
-        resolved_model_name = (model_name or "").strip() or DEFAULT_OPENAI_AUTH_MODEL
-    else:
-        provider_base_url = resolved_model_base_url or (
-            config.model_base_url
-            if config
-            else MODEL_PROVIDER_CONFIGS[DEFAULT_MODEL_PROVIDER].model_base_url
-        )
-        resolved_model_name = resolve_model_name(model_name, resolved_provider)
+    provider_base_url = resolved_model_base_url or (
+        config.model_base_url
+        if config
+        else MODEL_PROVIDER_CONFIGS[default_model_provider()].model_base_url
+    )
+    resolved_model_name = resolve_model_name(model_name, resolved_provider)
     resolved_codex_provider = codex_model_provider_id(resolved_provider)
     quoted_model = _toml_quote(resolved_model_name)
     lines = [

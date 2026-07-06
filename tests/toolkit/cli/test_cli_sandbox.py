@@ -25,6 +25,12 @@ from typer.testing import CliRunner
 runner = CliRunner()
 
 
+@pytest.fixture(autouse=True)
+def _clear_cloud_provider_env(monkeypatch):
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("CLOUD_PROVIDER", raising=False)
+
+
 class _FakeCreateSessionResponse:
     user_session_id = "user-session-from-api"
     session_id = "session-from-api"
@@ -1132,6 +1138,83 @@ def test_build_model_envs_infers_provider_from_builtin_model_base_url(
     assert (
         'base_url = "https://ark.cn-beijing.volces.com/api/coding/v3"' in envs[8].value
     )
+
+
+def test_build_model_envs_infers_byteplus_provider_from_builtin_model_base_url(
+    monkeypatch,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+
+    envs = session_create.build_model_envs(
+        model_base_url="https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        include_codex_config=True,
+    )
+
+    assert [(item.key, item.value) for item in envs] == [
+        ("AGENTKIT_SANDBOX_MODEL_PROVIDER", "byteplus_coding_plan"),
+        ("OPENCODE_MODEL", "deepseek-v4-flash"),
+        ("CODEX_MODEL", "deepseek-v4-flash"),
+        ("ANTHROPIC_MODEL", "deepseek-v4-flash"),
+        (
+            "OPENCODE_BASE_URL",
+            "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        ),
+        ("CODEX_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/coding/v3"),
+        ("MODEL_BASE_URL", "https://ark.ap-southeast.bytepluses.com/api/coding/v3"),
+        (
+            "ANTHROPIC_BASE_URL",
+            "https://ark.ap-southeast.bytepluses.com/api/coding/v3",
+        ),
+        (
+            "CODEX_CONFIG_TOML",
+            envs[8].value,
+        ),
+        (
+            "CODEX_MODEL_CATALOG_JSON",
+            envs[9].value,
+        ),
+    ]
+    assert 'model_provider = "byteplus_coding_plan"' in envs[8].value
+    assert (
+        'base_url = "https://ark.ap-southeast.bytepluses.com/api/coding/v3"'
+        in envs[8].value
+    )
+
+
+def test_build_model_envs_uses_byteplus_default_provider_for_codex_config(
+    monkeypatch,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.delenv("AGENTKIT_CLOUD_PROVIDER", raising=False)
+    monkeypatch.delenv("MODEL_API_KEY", raising=False)
+    monkeypatch.setenv("CLOUD_PROVIDER", "byteplus")
+
+    envs = session_create.build_model_envs(
+        model_name="glm-5.2",
+        include_codex_config=True,
+    )
+    env_map = {item.key: item.value for item in envs}
+
+    assert list(env_map) == [
+        "OPENCODE_MODEL",
+        "CODEX_MODEL",
+        "ANTHROPIC_MODEL",
+        "CODEX_CONFIG_TOML",
+        "CODEX_MODEL_CATALOG_JSON",
+    ]
+    assert env_map["CODEX_MODEL"] == "glm-5.2"
+    assert 'model_provider = "byteplus_model_square"' in env_map["CODEX_CONFIG_TOML"]
+    assert "[model_providers.byteplus_model_square]" in env_map["CODEX_CONFIG_TOML"]
+    assert (
+        'base_url = "https://ark.ap-southeast.bytepluses.com/api/v3"'
+        in env_map["CODEX_CONFIG_TOML"]
+    )
+    catalog = json.loads(env_map["CODEX_MODEL_CATALOG_JSON"])
+    models = {model["slug"] for model in catalog["models"]}
+    assert "deepseek-v4-flash-260425" in models
 
 
 def test_ensure_sandbox_session_skips_tos_mount_when_tool_has_none(
