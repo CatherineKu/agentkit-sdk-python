@@ -292,7 +292,7 @@ class VeSandboxCPCRBuilder(VeCPCRBuilder):
             self.reporter.success(f"Project archive created: {archive_path}")
             return archive_path
         except Exception as e:
-            raise Exception(f"Failed to create project archive: {str(e)}")
+            raise Exception(f"Failed to create project archive: {str(e)}") from e
 
     def _prepare_pipeline_resources(
         self, config: VeSandboxCPCRBuilderConfig, tos_url: str, cr_config: Any
@@ -490,7 +490,7 @@ class VeSandboxCPCRBuilder(VeCPCRBuilder):
             config.image_url = image_url
             return image_url
         except Exception as e:
-            raise Exception(f"Sandbox build execution failed: {str(e)}")
+            raise Exception(f"Sandbox build execution failed: {str(e)}") from e
 
     def _build_pipeline_parameters(
         self,
