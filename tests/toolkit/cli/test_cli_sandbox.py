@@ -67,12 +67,14 @@ class _FakeGetToolResponse:
         tool_type=None,
         name="fake-tool",
         status="Ready",
+        enable_snapshot=None,
         tos_mount_config=None,
     ):
         self.tool_id = tool_id
         self.tool_type = tool_type
         self.name = name
         self.status = status
+        self.enable_snapshot = enable_snapshot
         self.tos_mount_config = tos_mount_config
 
 
@@ -875,6 +877,108 @@ def test_save_tool_result_omits_model_base_url_fields(
             "ToolType": "CodeEnv",
             "ModelProvider": "model_square",
         },
+    }
+
+
+def test_tool_snapshot_enabled_defaults_false_for_cached_tools(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    tool_store_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_store_path.write_text(
+        json.dumps(
+            {
+                "CodeEnv": {
+                    "ToolId": "tool-old",
+                    "ToolType": "CodeEnv",
+                    "Name": "old-tool",
+                    "Status": "Ready",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        tool_resolve.is_tool_snapshot_enabled(
+            tool_id="tool-old",
+            tool_type="CodeEnv",
+        )
+        is False
+    )
+
+
+def test_save_tool_result_persists_enable_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+
+    tool_resolve.save_tool_result(
+        "CodeEnv",
+        {
+            "ToolId": "tool-new",
+            "ToolType": "CodeEnv",
+            "Name": "new-tool",
+            "Status": "Ready",
+            "EnableSnapshot": True,
+        },
+    )
+
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "CodeEnv": {
+            "ToolId": "tool-new",
+            "Name": "new-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
+            "EnableSnapshot": True,
+        }
+    }
+    assert (
+        tool_resolve.is_tool_snapshot_enabled(
+            tool_id="tool-new",
+            tool_type="CodeEnv",
+        )
+        is True
+    )
+
+
+def test_resolve_existing_tool_id_caches_enable_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-snapshot",
+        tool_type="CodeEnv",
+        name="snapshot-tool",
+        status="Ready",
+        enable_snapshot=True,
+    )
+
+    result = tool_resolve.resolve_existing_sandbox_tool_id(
+        tool_id="tool-snapshot",
+        tool_type="CodeEnv",
+        client=_FakeToolsClient(),
+        env_var_name="AGENTKIT_SANDBOX_TOOL_ID",
+    )
+
+    assert result == "tool-snapshot"
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "CodeEnv": {
+            "ToolId": "tool-snapshot",
+            "Name": "snapshot-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
+            "EnableSnapshot": True,
+        }
     }
 
 

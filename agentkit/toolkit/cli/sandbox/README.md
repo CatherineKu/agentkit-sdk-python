@@ -121,6 +121,9 @@ Options:
   `/home/gem/workspace`.
 - `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
   `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
+- `--enable-snapshot`: optional. Enables snapshot support for the created
+  sandbox tool. If omitted, the CLI does not send `EnableSnapshot` in the
+  `CreateTool` request.
 - `--network-config`: optional. Network configuration as inline JSON or a path
   to a JSON file. If omitted, the tool is created with public access enabled
   and private access disabled.
@@ -149,6 +152,8 @@ Options:
 
 The sandbox create request maps `--cpu` to `CpuMilli=<cpu * 1000>` and
 `MemoryMb=<cpu * 2048>`, so the default shape is 4 vCPU / 8 GiB.
+When `--enable-snapshot` is present, the request also includes
+`EnableSnapshot=true`; otherwise that field is omitted.
 
 Network configuration uses the same access concepts as the AgentKit console:
 
@@ -245,7 +250,9 @@ configuration and session creation skips TOS mounting.
 After the tool reaches `Ready`, `agentkit sandbox create` writes the tool
 information to `.agentkit/sandbox/tools.json`. Only one tool record is stored
 per `ToolType`; creating or resolving another tool of the same type replaces
-that type's record.
+that type's record. Tools created or resolved with snapshot support include
+`EnableSnapshot: true`; older cached records without this field are treated as
+snapshot-disabled.
 
 ### Get
 
@@ -727,7 +734,8 @@ Example:
     "ToolId": "t-code-example",
     "Name": "agentkit-codeenv-example",
     "Status": "Ready",
-    "ToolType": "CodeEnv"
+    "ToolType": "CodeEnv",
+    "EnableSnapshot": true
   },
   "SkillEnv": {
     "ToolId": "t-skill-example",

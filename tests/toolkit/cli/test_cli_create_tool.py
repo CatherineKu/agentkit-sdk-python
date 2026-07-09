@@ -214,6 +214,7 @@ def test_create_command_skips_tos_mount_by_default(
     assert _FakeToolsClient.last_request.tool_type == "CodeEnv"
     assert _FakeToolsClient.last_request.cpu_milli == 4000
     assert _FakeToolsClient.last_request.memory_mb == 8192
+    assert _FakeToolsClient.last_request.enable_snapshot is None
     assert _FakeToolsClient.last_request.tos_mount_config is None
     assert _FakeToolsClient.get_call_count == 1
     assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
@@ -443,6 +444,38 @@ def test_create_command_uses_cpu_option_for_resource_shape(monkeypatch):
     assert _FakeToolsClient.last_request.memory_mb == 4096
 
 
+def test_create_command_passes_enable_snapshot_only_when_requested(
+    monkeypatch,
+    tool_store_path,
+):
+    from agentkit.toolkit.cli.cli import app
+    from agentkit.toolkit.cli.sandbox import cli_create
+
+    _reset_fake_tools_client()
+    monkeypatch.setattr(cli_create, "AgentkitToolsClient", _FakeToolsClient)
+    monkeypatch.setattr(cli_create, "TOSService", _FakeTOSService)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "create",
+            "--tool-name",
+            "demo-tool",
+            "--enable-snapshot",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert _FakeToolsClient.last_request.enable_snapshot is True
+    assert (
+        json.loads(tool_store_path.read_text(encoding="utf-8"))["SkillEnv"][
+            "EnableSnapshot"
+        ]
+        is True
+    )
+
+
 def test_create_command_rejects_invalid_cpu(monkeypatch):
     from agentkit.toolkit.cli.cli import app
     from agentkit.toolkit.cli.sandbox import cli_create
@@ -499,6 +532,7 @@ def test_create_command_help_includes_model_base_url_option():
     assert "/home/gem/workspace" in result.output
     assert "--model-provider" in result.output
     assert "--model-base-url" in result.output
+    assert "--enable-snapshot" in result.output
 
 
 def test_create_command_waits_until_tool_ready(monkeypatch):

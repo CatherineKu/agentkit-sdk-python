@@ -227,9 +227,7 @@ def _build_network_configuration(
     )
 
     if not private_access and not public_access:
-        _network_config_error(
-            "private_access and public_access cannot both be false"
-        )
+        _network_config_error("private_access and public_access cannot both be false")
     if private_access and not vpc_id:
         _network_config_error("vpc_id is required when private_access is true")
     if not private_access and any(
@@ -276,6 +274,7 @@ def _build_create_tool_request(
     role_name: Optional[str] = None,
     websearch_apikey: Optional[str] = None,
     image_url: Optional[str] = None,
+    enable_snapshot: bool = False,
     network_config: Optional[str] = None,
 ) -> tools_types.CreateToolRequest:
     resolved_tool_type = _validate_tool_type(tool_type)
@@ -324,6 +323,7 @@ def _build_create_tool_request(
         Port=port,
         CpuMilli=cpu_milli,
         MemoryMb=memory_mb,
+        EnableSnapshot=True if enable_snapshot else None,
         RoleName=role_name,
         AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
             KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
@@ -508,6 +508,7 @@ def create_tool(
     skill_role_name_provided: bool = False,
     websearch_apikey: Optional[str] = None,
     image_url: Optional[str] = None,
+    enable_snapshot: bool = False,
     network_config: Optional[str] = None,
 ) -> dict[str, object]:
     resolved_model_base_url = normalize_model_base_url(model_base_url)
@@ -549,6 +550,7 @@ def create_tool(
         role_name=resolved_role_name,
         websearch_apikey=resolved_websearch_apikey,
         image_url=image_url,
+        enable_snapshot=enable_snapshot,
         network_config=network_config,
     )
     client = AgentkitToolsClient(
@@ -568,6 +570,7 @@ def create_tool(
         "model_base_url": resolved_model_base_url,
         "role_name": resolved_role_name,
         "websearch_apikey_set": bool(resolved_websearch_apikey),
+        "enable_snapshot": bool(enable_snapshot),
     }
 
 
@@ -645,6 +648,11 @@ def create_command(
         "--image-url",
         help="Custom image URL. Required when --tool-type Private.",
     ),
+    enable_snapshot: bool = typer.Option(
+        False,
+        "--enable-snapshot",
+        help="Enable snapshot support for the created sandbox tool.",
+    ),
     network_config: Optional[str] = typer.Option(
         None,
         "--network-config",
@@ -680,6 +688,7 @@ def create_command(
             skill_role_name_provided=skill_role_name_provided,
             websearch_apikey=websearch_apikey,
             image_url=image_url,
+            enable_snapshot=enable_snapshot,
             network_config=network_config,
         )
         save_tool_result_if_resolvable(str(result["tool_type"]), result)
