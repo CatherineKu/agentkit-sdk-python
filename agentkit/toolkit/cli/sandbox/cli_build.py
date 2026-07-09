@@ -75,10 +75,14 @@ def build_command(
 
     result = builder.build(config)
     if result.success:
+        from agentkit.toolkit.cli.sandbox.sandbox_client import save_sandbox_yaml
+
         image_name = result.image.full_name if result.image else config.image_url
         console.print("[green]✅ Sandbox image build completed successfully![/green]")
         if image_name:
             console.print(f"[green]📦 Image: {image_name}[/green]")
+            yaml_path = save_sandbox_yaml(image_name)
+            console.print(f"[green]📝 Wrote {yaml_path}[/green]")
     else:
         console.print(f"[red]❌ Sandbox image build failed: {result.error}[/red]")
         raise typer.Exit(1)
