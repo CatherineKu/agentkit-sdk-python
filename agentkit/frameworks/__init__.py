@@ -14,6 +14,7 @@ __all__ = [
     "LangChainAgentkitBridge",
     "LangGraphAgentkitBridge",
     "UnsupportedFrameworkAgentError",
+    "load_entry_object",
 ]
 
 
@@ -26,4 +27,8 @@ def __getattr__(name: str) -> Any:
         from agentkit.frameworks.langgraph import LangGraphAgentkitBridge
 
         return LangGraphAgentkitBridge
+    if name == "load_entry_object":
+        from agentkit.frameworks.migration import load_entry_object
+
+        return load_entry_object
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
