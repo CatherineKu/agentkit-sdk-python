@@ -98,6 +98,32 @@ class _FakeListSessionsResponse:
         self.next_token = next_token
 
 
+class _FakeSnapshot:
+    def __init__(
+        self,
+        snapshot_id="snapshot-1",
+        session_id="instance-old",
+        user_session_id="user-1",
+        status="Ready",
+        created_at="2026-01-01T00:00:00Z",
+    ):
+        self.snapshot_id = snapshot_id
+        self.session_id = session_id
+        self.user_session_id = user_session_id
+        self.status = status
+        self.created_at = created_at
+
+
+class _FakeListSessionSnapshotsResponse:
+    def __init__(self, snapshots=None):
+        self.snapshots = [] if snapshots is None else snapshots
+
+
+class _FakeResumeSessionFromSnapshotResponse:
+    def __init__(self, session_id="instance-restored"):
+        self.session_id = session_id
+
+
 class _FakeListTool:
     def __init__(
         self,
@@ -123,20 +149,27 @@ class _FakeToolsClient:
     last_get_tool_request = None
     last_list_request = None
     last_list_sessions_request = None
+    last_list_snapshots_request = None
+    last_resume_snapshot_request = None
     list_sessions_requests = []
     response = _FakeCreateSessionResponse()
     get_response = _FakeGetSessionResponse()
     get_tool_response = _FakeGetToolResponse()
     list_response = _FakeListToolsResponse()
     list_sessions_responses = [_FakeListSessionsResponse()]
+    list_snapshots_response = _FakeListSessionSnapshotsResponse()
+    resume_snapshot_response = _FakeResumeSessionFromSnapshotResponse()
     create_error = None
     get_error = None
     get_tool_error = None
+    resume_snapshot_error = None
     create_call_count = 0
     get_call_count = 0
     get_tool_call_count = 0
     list_call_count = 0
     list_sessions_call_count = 0
+    list_snapshots_call_count = 0
+    resume_snapshot_call_count = 0
 
     def create_session(self, request):
         _FakeToolsClient.last_request = request
@@ -178,6 +211,18 @@ class _FakeToolsClient:
             return responses[index]
         return responses[-1]
 
+    def list_session_snapshots(self, request):
+        _FakeToolsClient.last_list_snapshots_request = request
+        _FakeToolsClient.list_snapshots_call_count += 1
+        return _FakeToolsClient.list_snapshots_response
+
+    def resume_session_from_snapshot(self, request):
+        _FakeToolsClient.last_resume_snapshot_request = request
+        _FakeToolsClient.resume_snapshot_call_count += 1
+        if _FakeToolsClient.resume_snapshot_error:
+            raise _FakeToolsClient.resume_snapshot_error
+        return _FakeToolsClient.resume_snapshot_response
+
 
 @pytest.fixture(autouse=True)
 def _reset_fake_client():
@@ -186,20 +231,27 @@ def _reset_fake_client():
     _FakeToolsClient.last_get_tool_request = None
     _FakeToolsClient.last_list_request = None
     _FakeToolsClient.last_list_sessions_request = None
+    _FakeToolsClient.last_list_snapshots_request = None
+    _FakeToolsClient.last_resume_snapshot_request = None
     _FakeToolsClient.list_sessions_requests = []
     _FakeToolsClient.response = _FakeCreateSessionResponse()
     _FakeToolsClient.get_response = _FakeGetSessionResponse()
     _FakeToolsClient.get_tool_response = _FakeGetToolResponse()
     _FakeToolsClient.list_response = _FakeListToolsResponse()
     _FakeToolsClient.list_sessions_responses = [_FakeListSessionsResponse()]
+    _FakeToolsClient.list_snapshots_response = _FakeListSessionSnapshotsResponse()
+    _FakeToolsClient.resume_snapshot_response = _FakeResumeSessionFromSnapshotResponse()
     _FakeToolsClient.create_error = None
     _FakeToolsClient.get_error = None
     _FakeToolsClient.get_tool_error = None
+    _FakeToolsClient.resume_snapshot_error = None
     _FakeToolsClient.create_call_count = 0
     _FakeToolsClient.get_call_count = 0
     _FakeToolsClient.get_tool_call_count = 0
     _FakeToolsClient.list_call_count = 0
     _FakeToolsClient.list_sessions_call_count = 0
+    _FakeToolsClient.list_snapshots_call_count = 0
+    _FakeToolsClient.resume_snapshot_call_count = 0
 
 
 def _patch_store_path(monkeypatch, tmp_path):
@@ -2926,6 +2978,182 @@ def test_ensure_sandbox_session_syncs_missing_local_session_before_create(
         "endpoint": "https://remote.example.com",
     }
     assert json.loads(store_path.read_text(encoding="utf-8")) == {"remote-user": result}
+
+
+def test_ensure_sandbox_session_without_snapshot_enabled_does_not_list_snapshots(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.list_snapshots_call_count == 0
+    assert _FakeToolsClient.resume_snapshot_call_count == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert result == {
+        "session_id": "user-session-from-api",
+        "tool_id": "tool-cli",
+        "instance_id": "session-from-api",
+        "endpoint": "https://sandbox.example.com",
+    }
+
+
+def test_ensure_sandbox_session_snapshot_tool_reuses_existing_remote_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-cli",
+        tool_type="CodeEnv",
+        enable_snapshot=True,
+    )
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-cli",
+                    session_id="instance-existing",
+                    endpoint="https://existing.example.com",
+                )
+            ]
+        )
+    ]
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.list_snapshots_call_count == 0
+    assert _FakeToolsClient.resume_snapshot_call_count == 0
+    assert result == {
+        "session_id": "user-cli",
+        "tool_id": "tool-cli",
+        "instance_id": "instance-existing",
+        "endpoint": "https://existing.example.com",
+    }
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {"user-cli": result}
+
+
+def test_ensure_sandbox_session_snapshot_tool_creates_when_no_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-cli",
+        tool_type="CodeEnv",
+        enable_snapshot=True,
+    )
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.list_sessions_call_count == 1
+    assert _FakeToolsClient.list_snapshots_call_count == 1
+    assert _FakeToolsClient.resume_snapshot_call_count == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.last_list_snapshots_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_list_snapshots_request.user_session_id == "user-cli"
+    assert _FakeToolsClient.last_list_snapshots_request.max_results == 1
+    assert result == {
+        "session_id": "user-session-from-api",
+        "tool_id": "tool-cli",
+        "instance_id": "session-from-api",
+        "endpoint": "https://sandbox.example.com",
+    }
+
+
+def test_ensure_sandbox_session_snapshot_tool_restores_first_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    class RestoredGetResponse:
+        user_session_id = "user-cli"
+        session_id = "instance-restored"
+        endpoint = "https://restored.example.com"
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-cli",
+        tool_type="CodeEnv",
+        enable_snapshot=True,
+    )
+    _FakeToolsClient.list_snapshots_response = _FakeListSessionSnapshotsResponse(
+        [
+            _FakeSnapshot(snapshot_id="snapshot-first"),
+            _FakeSnapshot(snapshot_id="snapshot-second"),
+        ]
+    )
+    _FakeToolsClient.resume_snapshot_response = _FakeResumeSessionFromSnapshotResponse(
+        session_id="instance-restored"
+    )
+    _FakeToolsClient.get_response = RestoredGetResponse()
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+        ttl=60,
+    )
+
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.list_sessions_call_count == 1
+    assert _FakeToolsClient.list_snapshots_call_count == 1
+    assert _FakeToolsClient.resume_snapshot_call_count == 1
+    assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.last_resume_snapshot_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_resume_snapshot_request.snapshot_id == "snapshot-first"
+    assert _FakeToolsClient.last_resume_snapshot_request.ttl == 60
+    assert _FakeToolsClient.last_resume_snapshot_request.create_new_instance is True
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_get_request.session_id == "instance-restored"
+    assert result == {
+        "session_id": "user-cli",
+        "tool_id": "tool-cli",
+        "instance_id": "instance-restored",
+        "endpoint": "https://restored.example.com",
+    }
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {"user-cli": result}
 
 
 def test_ensure_sandbox_session_recreates_when_remote_session_missing(

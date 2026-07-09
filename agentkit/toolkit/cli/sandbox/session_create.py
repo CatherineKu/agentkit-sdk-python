@@ -37,6 +37,7 @@ from agentkit.toolkit.cli.sandbox.session_sync import (
 from agentkit.toolkit.cli.sandbox.tos_config import build_session_tos_mount_points
 from agentkit.toolkit.cli.sandbox.tool_resolve import (
     DEFAULT_SANDBOX_TOOL_TYPE,
+    is_tool_snapshot_enabled,
     resolve_sandbox_tool_id,
 )
 from agentkit.toolkit.cli.sandbox.sandbox_client import (
@@ -271,6 +272,97 @@ def _get_remote_session_by_user_session_id(
     return None
 
 
+def _get_first_session_snapshot_id(
+    client: AgentkitToolsClient,
+    *,
+    session_id: str,
+    tool_id: str,
+) -> str | None:
+    response = client.list_session_snapshots(
+        tools_types.ListSessionSnapshotsRequest(
+            tool_id=tool_id,
+            user_session_id=session_id,
+            max_results=1,
+        )
+    )
+    for snapshot in response.snapshots or []:
+        snapshot_id = getattr(snapshot, "snapshot_id", None)
+        if isinstance(snapshot_id, str) and snapshot_id.strip():
+            return snapshot_id.strip()
+    return None
+
+
+def _resume_session_from_snapshot(
+    client: AgentkitToolsClient,
+    *,
+    session_id: str,
+    tool_id: str,
+    snapshot_id: str,
+    ttl: int,
+) -> dict[str, object]:
+    response = client.resume_session_from_snapshot(
+        tools_types.ResumeSessionFromSnapshotRequest(
+            tool_id=tool_id,
+            snapshot_id=snapshot_id,
+            ttl=ttl,
+            create_new_instance=True,
+        )
+    )
+    instance_id = response.session_id
+    if not isinstance(instance_id, str) or not instance_id.strip():
+        raise RuntimeError("ResumeSessionFromSnapshot response missing SessionId")
+
+    session = client.get_session(
+        tools_types.GetSessionRequest(
+            tool_id=tool_id,
+            session_id=instance_id.strip(),
+        )
+    )
+    return _build_result(
+        session_id=session_id,
+        tool_id=tool_id,
+        instance_id=session.session_id or instance_id.strip(),
+        endpoint=session.endpoint,
+    )
+
+
+def _maybe_restore_snapshot_session(
+    client: AgentkitToolsClient,
+    *,
+    session_id: str,
+    tool_id: str,
+    tool_type: str,
+    ttl: int,
+) -> tuple[dict[str, object], bool] | None:
+    if not is_tool_snapshot_enabled(tool_id=tool_id, tool_type=tool_type):
+        return None
+
+    current = _get_remote_session_by_user_session_id(
+        client,
+        session_id=session_id,
+        tool_id=tool_id,
+    )
+    if current:
+        return current, False
+
+    snapshot_id = _get_first_session_snapshot_id(
+        client,
+        session_id=session_id,
+        tool_id=tool_id,
+    )
+    if not snapshot_id:
+        return None
+
+    result = _resume_session_from_snapshot(
+        client,
+        session_id=session_id,
+        tool_id=tool_id,
+        snapshot_id=snapshot_id,
+        ttl=ttl,
+    )
+    return result, True
+
+
 def ensure_sandbox_session_with_status(
     session_id: Optional[str] = None,
     tool_id: Optional[str] = None,
@@ -283,31 +375,48 @@ def ensure_sandbox_session_with_status(
     resolved_session_id = session_id or str(uuid.uuid4())
     existing = find_session_result(resolved_session_id) if session_id else None
     client = AgentkitToolsClient()
-    synced_tool_id = None
-    if resolve_tool and session_id and not existing:
-        synced_tool_id = sync_remote_sessions(
-            session_id=resolved_session_id,
+    ttl_seconds = _resolve_ttl(ttl)
+
+    if resolve_tool:
+        resolved_tool_id = resolve_sandbox_tool_id(
             tool_id=tool_id,
             tool_type=tool_type,
+            default_tool_id=existing.get("tool_id") if existing else None,
             client=client,
             env_var_name=SANDBOX_TOOL_ID_ENV,
         )
-        existing = find_session_result(resolved_session_id)
+    else:
+        resolved_tool_id = (tool_id or "").strip()
+        if not resolved_tool_id:
+            error("Sandbox tool ID is required")
 
-    resolved_tool_id = synced_tool_id
-    if not resolved_tool_id:
-        if resolve_tool:
-            resolved_tool_id = resolve_sandbox_tool_id(
-                tool_id=tool_id,
-                tool_type=tool_type,
-                default_tool_id=existing.get("tool_id") if existing else None,
-                client=client,
-                env_var_name=SANDBOX_TOOL_ID_ENV,
-            )
-        else:
-            resolved_tool_id = (tool_id or "").strip()
-            if not resolved_tool_id:
-                error("Sandbox tool ID is required")
+    snapshot_enabled = bool(session_id) and is_tool_snapshot_enabled(
+        tool_id=resolved_tool_id,
+        tool_type=tool_type,
+    )
+    if snapshot_enabled:
+        restored = _maybe_restore_snapshot_session(
+            client,
+            session_id=resolved_session_id,
+            tool_id=resolved_tool_id,
+            tool_type=tool_type,
+            ttl=ttl_seconds,
+        )
+        if restored:
+            result, is_new = restored
+            save_session_result(result)
+            return result, is_new
+
+        result = _create_session(
+            client,
+            resolved_session_id,
+            resolved_tool_id,
+            ttl_seconds,
+            envs=envs,
+            include_tos_mount_points=include_tos_mount_points,
+        )
+        save_session_result(result)
+        return result, True
 
     if existing:
         result = _get_existing_remote_session(
@@ -342,6 +451,23 @@ def ensure_sandbox_session_with_status(
                     save_session_result(result)
                     return result, False
 
+    if resolve_tool and session_id and not existing:
+        existing = _get_remote_session_by_user_session_id(
+            client,
+            session_id=resolved_session_id,
+            tool_id=resolved_tool_id,
+        )
+        if existing:
+            result = _get_existing_remote_session(
+                client,
+                existing,
+                resolved_session_id,
+                resolved_tool_id,
+            )
+            if result:
+                save_session_result(result)
+                return result, False
+
     if session_id and not resolve_tool:
         result = _get_remote_session_by_user_session_id(
             client,
@@ -357,7 +483,7 @@ def ensure_sandbox_session_with_status(
         client,
         resolved_session_id,
         resolved_tool_id,
-        _resolve_ttl(ttl),
+        ttl_seconds,
         envs=session_envs,
         include_tos_mount_points=include_tos_mount_points,
     )

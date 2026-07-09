@@ -34,6 +34,9 @@ class AssociatedRuntimesForGetTool(ToolsBaseModel):
 
 
 class AuthorizerConfigurationForGetTool(ToolsBaseModel):
+    custom_jwt_authorizer: Optional[CustomJwtAuthorizerForGetTool] = Field(
+        default=None, alias="CustomJwtAuthorizer"
+    )
     key_auth: Optional[KeyAuthForGetTool] = Field(default=None, alias="KeyAuth")
 
 
@@ -44,6 +47,11 @@ class AuthorizerConfigurationForListTools(ToolsBaseModel):
 class CredentialsForGetTool(ToolsBaseModel):
     access_key_id: Optional[str] = Field(default=None, alias="AccessKeyId")
     secret_access_key: Optional[str] = Field(default=None, alias="SecretAccessKey")
+
+
+class CustomJwtAuthorizerForGetTool(ToolsBaseModel):
+    allowed_clients: Optional[list[str]] = Field(default=None, alias="AllowedClients")
+    discovery_url: Optional[str] = Field(default=None, alias="DiscoveryUrl")
 
 
 class EnvsForGetTool(ToolsBaseModel):
@@ -121,20 +129,23 @@ class SessionMetaForListSessions(ToolsBaseModel):
 
 class SnapshotForGetSessionSnapshot(ToolsBaseModel):
     created_at: Optional[str] = Field(default=None, alias="CreatedAt")
+    reason: Optional[str] = Field(default=None, alias="Reason")
+    sandbox_id: Optional[str] = Field(default=None, alias="SandboxId")
     session_id: Optional[str] = Field(default=None, alias="SessionId")
     snapshot_id: Optional[str] = Field(default=None, alias="SnapshotId")
     status: Optional[str] = Field(default=None, alias="Status")
     tool_id: Optional[str] = Field(default=None, alias="ToolId")
-    updated_at: Optional[str] = Field(default=None, alias="UpdatedAt")
 
 
 class SnapshotsForListSessionSnapshots(ToolsBaseModel):
     created_at: Optional[str] = Field(default=None, alias="CreatedAt")
+    reason: Optional[str] = Field(default=None, alias="Reason")
+    sandbox_id: Optional[str] = Field(default=None, alias="SandboxId")
     session_id: Optional[str] = Field(default=None, alias="SessionId")
     snapshot_id: Optional[str] = Field(default=None, alias="SnapshotId")
     status: Optional[str] = Field(default=None, alias="Status")
     tool_id: Optional[str] = Field(default=None, alias="ToolId")
-    updated_at: Optional[str] = Field(default=None, alias="UpdatedAt")
+    user_session_id: Optional[str] = Field(default=None, alias="UserSessionId")
 
 
 class TagsForGetTool(ToolsBaseModel):
@@ -167,10 +178,12 @@ class ToolsForListTools(ToolsBaseModel):
         default=None, alias="AuthorizerConfiguration"
     )
     command: Optional[str] = Field(default=None, alias="Command")
+    cpu_milli: Optional[int] = Field(default=None, alias="CpuMilli")
     created_at: Optional[str] = Field(default=None, alias="CreatedAt")
     description: Optional[str] = Field(default=None, alias="Description")
     envs: Optional[list[EnvsForListTools]] = Field(default=None, alias="Envs")
     image_url: Optional[str] = Field(default=None, alias="ImageUrl")
+    memory_mb: Optional[int] = Field(default=None, alias="MemoryMb")
     model_agent_name: Optional[str] = Field(default=None, alias="ModelAgentName")
     name: Optional[str] = Field(default=None, alias="Name")
     network_configurations: Optional[list[NetworkConfigurationsForListTools]] = Field(
@@ -234,12 +247,6 @@ class VpcConfigurationForListTools(ToolsBaseModel):
 
 
 # CreateSession - Request
-class ImageForCreateSession(ToolsBaseModel):
-    command: str = Field(..., alias="Command")
-    image: str = Field(..., alias="Image")
-    port: int = Field(..., alias="Port")
-
-
 class EnvsItemForCreateSession(ToolsBaseModel):
     key: str = Field(..., alias="Key")
     value: Optional[str] = Field(default=None, alias="Value")
@@ -252,11 +259,11 @@ class TosMountPointsItemForCreateSession(ToolsBaseModel):
 
 
 class CreateSessionRequest(ToolsBaseModel):
+    name: Optional[str] = Field(default=None, alias="Name")
     tool_id: str = Field(..., alias="ToolId")
     ttl: Optional[int] = Field(default=None, alias="Ttl")
     ttl_unit: Optional[str] = Field(default=None, alias="TtlUnit")
     user_session_id: Optional[str] = Field(default=None, alias="UserSessionId")
-    image_info: Optional[ImageForCreateSession] = Field(default=None, alias="ImageInfo")
     envs: Optional[list[EnvsItemForCreateSession]] = Field(default=None, alias="Envs")
     tos_mount_points: Optional[list[TosMountPointsItemForCreateSession]] = Field(
         default=None, alias="TosMountPoints"
@@ -554,6 +561,7 @@ class ListSessionSnapshotsRequest(ToolsBaseModel):
     page_size: Optional[int] = Field(default=None, alias="PageSize")
     session_id: Optional[str] = Field(default=None, alias="SessionId")
     tool_id: str = Field(..., alias="ToolId")
+    user_session_id: Optional[str] = Field(default=None, alias="UserSessionId")
 
 
 # ListSessionSnapshots - Response
@@ -592,9 +600,12 @@ class ListSessionsRequest(ToolsBaseModel):
 # ListSessions - Response
 class ListSessionsResponse(ToolsBaseModel):
     next_token: Optional[str] = Field(default=None, alias="NextToken")
+    page_number: Optional[int] = Field(default=None, alias="PageNumber")
+    page_size: Optional[int] = Field(default=None, alias="PageSize")
     session_infos: Optional[list[SessionInfosForListSessions]] = Field(
         default=None, alias="SessionInfos"
     )
+    total_count: Optional[int] = Field(default=None, alias="TotalCount")
 
 
 # ListTools - Request
