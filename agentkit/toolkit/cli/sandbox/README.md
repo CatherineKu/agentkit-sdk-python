@@ -36,6 +36,62 @@ python3 -m pip show agentkit-sdk-python
 
 ## Commands
 
+### Build
+
+Build and push a custom sandbox image with Volcano Engine Code Pipeline and
+Container Registry. The command packages the project directory, uploads the
+archive to TOS, creates or reuses the sandbox image build pipeline, and pushes
+the resulting image to CR.
+
+```bash
+agentkit sandbox build \
+  --project-dir ./sandbox-image \
+  --dockerfile Dockerfile \
+  --image-name agentkit-custom-sandbox-image \
+  --namespace agentkit \
+  --tag "{{timestamp}}"
+```
+
+Options:
+
+- `--project-dir`: optional. Project directory to package as the Docker build
+  context; defaults to the current directory.
+- `--dockerfile`: optional. Dockerfile path relative to `--project-dir`;
+  defaults to `Dockerfile`.
+- `--image-name` / `--repo`: optional. Container Registry repository name;
+  defaults to `agentkit-custom-sandbox-image`.
+- `--namespace`: optional. Container Registry namespace; defaults to
+  `agentkit`.
+- `--tag`: optional. Container image tag; defaults to `{{timestamp}}`.
+
+### Init Dockerfile
+
+Create a Dockerfile template for a custom sandbox image.
+
+```bash
+agentkit sandbox init-dockerfile --template package
+agentkit sandbox init-dockerfile --template skill
+agentkit sandbox init-dockerfile --template web-server
+agentkit sandbox init-dockerfile --template package -o ./Dockerfile
+```
+
+Options:
+
+- `--template` / `-t`: optional. Dockerfile template to generate. Currently
+  available: `package`, `skill`, `web-server`.
+- `--output` / `-o`: optional. Output Dockerfile path. Defaults to
+  `Dockerfile.install-package` for `package`, `Dockerfile.install-skills` for
+  `skill`, and `Dockerfile.web-server` for `web-server`.
+- `--force` / `-f`: optional. Overwrite the output file if it already exists.
+
+The `skill` template copies local Codex skills from `./skills/` in the Docker
+build context into `/home/gem/.codex/skills/`, matching the sandbox CodeEnv
+`CODEX_HOME`.
+
+The `web-server` template exposes nginx on port `8080` and proxies `/app/` to a
+local server on `127.0.0.1:8000`. Put server code under `./server/` and adjust
+the route or command in the generated Dockerfile as needed.
+
 ### Create
 
 Create an AgentKit Tool for sandbox sessions. This command builds a `CreateTool`
@@ -65,6 +121,9 @@ Options:
   `/home/gem/workspace`.
 - `--cpu`: optional. Sandbox vCPU count; allowed values are `2`, `4`, `8`, and
   `16`. Defaults to `4`. Memory is derived as 2 GiB per vCPU.
+- `--enable-snapshot`: optional. Enables snapshot support for the created
+  sandbox tool. If omitted, the CLI does not send `EnableSnapshot` in the
+  `CreateTool` request.
 - `--network-config`: optional. Network configuration as inline JSON or a path
   to a JSON file. If omitted, the tool is created with public access enabled
   and private access disabled.
@@ -93,6 +152,8 @@ Options:
 
 The sandbox create request maps `--cpu` to `CpuMilli=<cpu * 1000>` and
 `MemoryMb=<cpu * 2048>`, so the default shape is 4 vCPU / 8 GiB.
+When `--enable-snapshot` is present, the request also includes
+`EnableSnapshot=true`; otherwise that field is omitted.
 
 Network configuration uses the same access concepts as the AgentKit console:
 
@@ -189,7 +250,9 @@ configuration and session creation skips TOS mounting.
 After the tool reaches `Ready`, `agentkit sandbox create` writes the tool
 information to `.agentkit/sandbox/tools.json`. Only one tool record is stored
 per `ToolType`; creating or resolving another tool of the same type replaces
-that type's record.
+that type's record. Tools created or resolved with snapshot support include
+`EnableSnapshot: true`; older cached records without this field are treated as
+snapshot-disabled.
 
 ### Get
 
@@ -671,7 +734,8 @@ Example:
     "ToolId": "t-code-example",
     "Name": "agentkit-codeenv-example",
     "Status": "Ready",
-    "ToolType": "CodeEnv"
+    "ToolType": "CodeEnv",
+    "EnableSnapshot": true
   },
   "SkillEnv": {
     "ToolId": "t-skill-example",

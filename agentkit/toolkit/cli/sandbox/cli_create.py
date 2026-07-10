@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Any, NoReturn, Optional
 
 import typer
+import yaml
 
 from agentkit.platform import VolcConfiguration
 from agentkit.sdk.tools.client import AgentkitToolsClient
@@ -48,6 +49,7 @@ from agentkit.toolkit.cli.sandbox.tos_config import (
     build_create_tool_tos_mount_config,
 )
 from agentkit.toolkit.cli.sandbox.sandbox_client import error
+from agentkit.toolkit.cli.sandbox.sandbox_client import SANDBOX_YAML_PATH
 from agentkit.toolkit.volcengine.services.tos_service import (
     TOSService,
     TOSServiceConfig,
@@ -72,6 +74,55 @@ NETWORK_CONFIG_FIELDS = (
     "subnet_ids",
     "enable_shared_internet_access",
 )
+
+
+def _get_sandbox_yaml_path() -> Path:
+    return Path.cwd() / SANDBOX_YAML_PATH
+
+
+def _load_sandbox_yaml_defaults() -> tuple[str, str] | None:
+    path = _get_sandbox_yaml_path()
+    if not path.exists():
+        return None
+
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError as exc:
+        error(f"Invalid {SANDBOX_YAML_PATH}: {exc}")
+    except OSError as exc:
+        error(f"Failed to read {SANDBOX_YAML_PATH}: {exc}")
+
+    if not isinstance(payload, dict):
+        error(f"Invalid {SANDBOX_YAML_PATH}: expected a YAML mapping")
+
+    raw_tool_type = payload.get("tool_type")
+    raw_image_url = payload.get("image_url")
+    if not isinstance(raw_tool_type, str) or not raw_tool_type.strip():
+        error(f"Invalid {SANDBOX_YAML_PATH}: tool_type must be a non-empty string")
+    if not isinstance(raw_image_url, str) or not raw_image_url.strip():
+        error(f"Invalid {SANDBOX_YAML_PATH}: image_url must be a non-empty string")
+
+    tool_type = _validate_tool_type(raw_tool_type)
+    image_url = raw_image_url.strip()
+    if tool_type == PRIVATE_TOOL_TYPE and not image_url:
+        error(f"Invalid {SANDBOX_YAML_PATH}: image_url is required for Private tools")
+
+    return tool_type, image_url
+
+
+def _resolve_create_tool_image_defaults(
+    *,
+    tool_type: Optional[str],
+    image_url: Optional[str],
+) -> tuple[str, Optional[str]]:
+    if tool_type is not None or image_url is not None:
+        return tool_type or DEFAULT_CREATE_TOOL_TYPE, image_url
+
+    defaults = _load_sandbox_yaml_defaults()
+    if defaults is None:
+        return DEFAULT_CREATE_TOOL_TYPE, image_url
+
+    return defaults
 
 
 def _resolve_region(env_var_name: str, service_key: str) -> str:
@@ -227,9 +278,7 @@ def _build_network_configuration(
     )
 
     if not private_access and not public_access:
-        _network_config_error(
-            "private_access and public_access cannot both be false"
-        )
+        _network_config_error("private_access and public_access cannot both be false")
     if private_access and not vpc_id:
         _network_config_error("vpc_id is required when private_access is true")
     if not private_access and any(
@@ -276,6 +325,7 @@ def _build_create_tool_request(
     role_name: Optional[str] = None,
     websearch_apikey: Optional[str] = None,
     image_url: Optional[str] = None,
+    enable_snapshot: bool = False,
     network_config: Optional[str] = None,
 ) -> tools_types.CreateToolRequest:
     resolved_tool_type = _validate_tool_type(tool_type)
@@ -324,6 +374,7 @@ def _build_create_tool_request(
         Port=port,
         CpuMilli=cpu_milli,
         MemoryMb=memory_mb,
+        EnableSnapshot=True if enable_snapshot else None,
         RoleName=role_name,
         AuthorizerConfiguration=tools_types.AuthorizerForCreateTool(
             KeyAuth=tools_types.AuthorizerKeyAuthForCreateTool(
@@ -508,6 +559,7 @@ def create_tool(
     skill_role_name_provided: bool = False,
     websearch_apikey: Optional[str] = None,
     image_url: Optional[str] = None,
+    enable_snapshot: bool = False,
     network_config: Optional[str] = None,
 ) -> dict[str, object]:
     resolved_model_base_url = normalize_model_base_url(model_base_url)
@@ -549,6 +601,7 @@ def create_tool(
         role_name=resolved_role_name,
         websearch_apikey=resolved_websearch_apikey,
         image_url=image_url,
+        enable_snapshot=enable_snapshot,
         network_config=network_config,
     )
     client = AgentkitToolsClient(
@@ -568,15 +621,16 @@ def create_tool(
         "model_base_url": resolved_model_base_url,
         "role_name": resolved_role_name,
         "websearch_apikey_set": bool(resolved_websearch_apikey),
+        "enable_snapshot": bool(enable_snapshot),
     }
 
 
 def create_command(
     ctx: typer.Context,
-    tool_type: str = typer.Option(
-        DEFAULT_CREATE_TOOL_TYPE,
+    tool_type: Optional[str] = typer.Option(
+        None,
         "--tool-type",
-        help="Tool type. Defaults to CodeEnv.",
+        help="Tool type. Defaults to Private if sandbox.yaml exists (from sandbox build) or CodeEnv.",
     ),
     tool_name: Optional[str] = typer.Option(
         None,
@@ -643,7 +697,12 @@ def create_command(
     image_url: Optional[str] = typer.Option(
         None,
         "--image-url",
-        help="Custom image URL. Required when --tool-type Private.",
+        help="Custom image URL. Defaults to sandbox.yaml (from sandbox build). Required for Private tools.",
+    ),
+    enable_snapshot: bool = typer.Option(
+        False,
+        "--enable-snapshot",
+        help="Enable snapshot support for the created sandbox tool.",
     ),
     network_config: Optional[str] = typer.Option(
         None,
@@ -664,6 +723,10 @@ def create_command(
     result = None
     try:
         skill_role_name, skill_role_name_provided = _resolve_create_extra_args(ctx)
+        tool_type, image_url = _resolve_create_tool_image_defaults(
+            tool_type=tool_type,
+            image_url=image_url,
+        )
         if tos_mount is not None and not (tos_bucket or "").strip():
             error("--tos-mount requires --tos-bucket")
         result = create_tool(
@@ -680,6 +743,7 @@ def create_command(
             skill_role_name_provided=skill_role_name_provided,
             websearch_apikey=websearch_apikey,
             image_url=image_url,
+            enable_snapshot=enable_snapshot,
             network_config=network_config,
         )
         save_tool_result_if_resolvable(str(result["tool_type"]), result)

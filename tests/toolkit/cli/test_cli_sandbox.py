@@ -67,12 +67,14 @@ class _FakeGetToolResponse:
         tool_type=None,
         name="fake-tool",
         status="Ready",
+        enable_snapshot=None,
         tos_mount_config=None,
     ):
         self.tool_id = tool_id
         self.tool_type = tool_type
         self.name = name
         self.status = status
+        self.enable_snapshot = enable_snapshot
         self.tos_mount_config = tos_mount_config
 
 
@@ -94,6 +96,32 @@ class _FakeListSessionsResponse:
     def __init__(self, session_infos=None, next_token=None):
         self.session_infos = [] if session_infos is None else session_infos
         self.next_token = next_token
+
+
+class _FakeSnapshot:
+    def __init__(
+        self,
+        snapshot_id="snapshot-1",
+        session_id="instance-old",
+        user_session_id="user-1",
+        status="Ready",
+        created_at="2026-01-01T00:00:00Z",
+    ):
+        self.snapshot_id = snapshot_id
+        self.session_id = session_id
+        self.user_session_id = user_session_id
+        self.status = status
+        self.created_at = created_at
+
+
+class _FakeListSessionSnapshotsResponse:
+    def __init__(self, snapshots=None):
+        self.snapshots = [] if snapshots is None else snapshots
+
+
+class _FakeResumeSessionFromSnapshotResponse:
+    def __init__(self, session_id="instance-restored"):
+        self.session_id = session_id
 
 
 class _FakeListTool:
@@ -121,20 +149,27 @@ class _FakeToolsClient:
     last_get_tool_request = None
     last_list_request = None
     last_list_sessions_request = None
+    last_list_snapshots_request = None
+    last_resume_snapshot_request = None
     list_sessions_requests = []
     response = _FakeCreateSessionResponse()
     get_response = _FakeGetSessionResponse()
     get_tool_response = _FakeGetToolResponse()
     list_response = _FakeListToolsResponse()
     list_sessions_responses = [_FakeListSessionsResponse()]
+    list_snapshots_response = _FakeListSessionSnapshotsResponse()
+    resume_snapshot_response = _FakeResumeSessionFromSnapshotResponse()
     create_error = None
     get_error = None
     get_tool_error = None
+    resume_snapshot_error = None
     create_call_count = 0
     get_call_count = 0
     get_tool_call_count = 0
     list_call_count = 0
     list_sessions_call_count = 0
+    list_snapshots_call_count = 0
+    resume_snapshot_call_count = 0
 
     def create_session(self, request):
         _FakeToolsClient.last_request = request
@@ -176,6 +211,18 @@ class _FakeToolsClient:
             return responses[index]
         return responses[-1]
 
+    def list_session_snapshots(self, request):
+        _FakeToolsClient.last_list_snapshots_request = request
+        _FakeToolsClient.list_snapshots_call_count += 1
+        return _FakeToolsClient.list_snapshots_response
+
+    def resume_session_from_snapshot(self, request):
+        _FakeToolsClient.last_resume_snapshot_request = request
+        _FakeToolsClient.resume_snapshot_call_count += 1
+        if _FakeToolsClient.resume_snapshot_error:
+            raise _FakeToolsClient.resume_snapshot_error
+        return _FakeToolsClient.resume_snapshot_response
+
 
 @pytest.fixture(autouse=True)
 def _reset_fake_client():
@@ -184,20 +231,27 @@ def _reset_fake_client():
     _FakeToolsClient.last_get_tool_request = None
     _FakeToolsClient.last_list_request = None
     _FakeToolsClient.last_list_sessions_request = None
+    _FakeToolsClient.last_list_snapshots_request = None
+    _FakeToolsClient.last_resume_snapshot_request = None
     _FakeToolsClient.list_sessions_requests = []
     _FakeToolsClient.response = _FakeCreateSessionResponse()
     _FakeToolsClient.get_response = _FakeGetSessionResponse()
     _FakeToolsClient.get_tool_response = _FakeGetToolResponse()
     _FakeToolsClient.list_response = _FakeListToolsResponse()
     _FakeToolsClient.list_sessions_responses = [_FakeListSessionsResponse()]
+    _FakeToolsClient.list_snapshots_response = _FakeListSessionSnapshotsResponse()
+    _FakeToolsClient.resume_snapshot_response = _FakeResumeSessionFromSnapshotResponse()
     _FakeToolsClient.create_error = None
     _FakeToolsClient.get_error = None
     _FakeToolsClient.get_tool_error = None
+    _FakeToolsClient.resume_snapshot_error = None
     _FakeToolsClient.create_call_count = 0
     _FakeToolsClient.get_call_count = 0
     _FakeToolsClient.get_tool_call_count = 0
     _FakeToolsClient.list_call_count = 0
     _FakeToolsClient.list_sessions_call_count = 0
+    _FakeToolsClient.list_snapshots_call_count = 0
+    _FakeToolsClient.resume_snapshot_call_count = 0
 
 
 def _patch_store_path(monkeypatch, tmp_path):
@@ -224,7 +278,7 @@ def _write_session_store(store_path, records):
     )
 
 
-def _patch_exec_session(monkeypatch, cli_exec, session, capture=None):
+def _patch_exec_session(monkeypatch, cli_exec, session, capture=None, is_new=True):
     def fake_ensure_sandbox_session(session_id=None, tool_id=None, **kwargs):
         if capture is not None:
             capture["session_id"] = session_id
@@ -232,10 +286,27 @@ def _patch_exec_session(monkeypatch, cli_exec, session, capture=None):
             capture.update(kwargs)
         return session
 
+    def fake_ensure_sandbox_session_with_status(
+        session_id=None,
+        tool_id=None,
+        **kwargs,
+    ):
+        if capture is not None:
+            capture["session_id"] = session_id
+            capture["tool_id"] = tool_id
+            capture.update(kwargs)
+        return session, is_new
+
     monkeypatch.setattr(
         cli_exec,
         "ensure_sandbox_session",
         fake_ensure_sandbox_session,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli_exec,
+        "ensure_sandbox_session_with_status",
+        fake_ensure_sandbox_session_with_status,
     )
 
 
@@ -861,6 +932,108 @@ def test_save_tool_result_omits_model_base_url_fields(
     }
 
 
+def test_tool_snapshot_enabled_defaults_false_for_cached_tools(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    tool_store_path.parent.mkdir(parents=True, exist_ok=True)
+    tool_store_path.write_text(
+        json.dumps(
+            {
+                "CodeEnv": {
+                    "ToolId": "tool-old",
+                    "ToolType": "CodeEnv",
+                    "Name": "old-tool",
+                    "Status": "Ready",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert (
+        tool_resolve.is_tool_snapshot_enabled(
+            tool_id="tool-old",
+            tool_type="CodeEnv",
+        )
+        is False
+    )
+
+
+def test_save_tool_result_persists_enable_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+
+    tool_resolve.save_tool_result(
+        "CodeEnv",
+        {
+            "ToolId": "tool-new",
+            "ToolType": "CodeEnv",
+            "Name": "new-tool",
+            "Status": "Ready",
+            "EnableSnapshot": True,
+        },
+    )
+
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "CodeEnv": {
+            "ToolId": "tool-new",
+            "Name": "new-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
+            "EnableSnapshot": True,
+        }
+    }
+    assert (
+        tool_resolve.is_tool_snapshot_enabled(
+            tool_id="tool-new",
+            tool_type="CodeEnv",
+        )
+        is True
+    )
+
+
+def test_resolve_existing_tool_id_caches_enable_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.tool_resolve as tool_resolve
+
+    tool_store_path = _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-snapshot",
+        tool_type="CodeEnv",
+        name="snapshot-tool",
+        status="Ready",
+        enable_snapshot=True,
+    )
+
+    result = tool_resolve.resolve_existing_sandbox_tool_id(
+        tool_id="tool-snapshot",
+        tool_type="CodeEnv",
+        client=_FakeToolsClient(),
+        env_var_name="AGENTKIT_SANDBOX_TOOL_ID",
+    )
+
+    assert result == "tool-snapshot"
+    assert json.loads(tool_store_path.read_text(encoding="utf-8")) == {
+        "CodeEnv": {
+            "ToolId": "tool-snapshot",
+            "Name": "snapshot-tool",
+            "Status": "Ready",
+            "ToolType": "CodeEnv",
+            "EnableSnapshot": True,
+        }
+    }
+
+
 def test_ensure_sandbox_session_options_override_env(monkeypatch, tmp_path) -> None:
     import agentkit.toolkit.cli.sandbox.session_create as session_create
 
@@ -948,6 +1121,21 @@ def test_build_model_envs_option_overrides_model_api_key_env(monkeypatch) -> Non
         ("CODEX_API_KEY", "cli-model-value"),
         ("ANTHROPIC_AUTH_TOKEN", "cli-model-value"),
     ]
+
+
+def test_build_codex_hot_update_env_allows_explicit_empty_api_key() -> None:
+    from agentkit.toolkit.cli.sandbox.model_config import build_codex_hot_update_env
+
+    env = build_codex_hot_update_env(
+        model_api_key="",
+        model_api_key_was_provided=True,
+    )
+
+    assert env == {
+        "CODEX_API_KEY": "",
+        "ARK_API_KEY": "",
+        "OPENAI_API_KEY": "",
+    }
 
 
 def test_build_model_envs_uses_model_base_url_and_emits_codex_config(
@@ -2792,6 +2980,182 @@ def test_ensure_sandbox_session_syncs_missing_local_session_before_create(
     assert json.loads(store_path.read_text(encoding="utf-8")) == {"remote-user": result}
 
 
+def test_ensure_sandbox_session_without_snapshot_enabled_does_not_list_snapshots(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.list_snapshots_call_count == 0
+    assert _FakeToolsClient.resume_snapshot_call_count == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert result == {
+        "session_id": "user-session-from-api",
+        "tool_id": "tool-cli",
+        "instance_id": "session-from-api",
+        "endpoint": "https://sandbox.example.com",
+    }
+
+
+def test_ensure_sandbox_session_snapshot_tool_reuses_existing_remote_session(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-cli",
+        tool_type="CodeEnv",
+        enable_snapshot=True,
+    )
+    _FakeToolsClient.list_sessions_responses = [
+        _FakeListSessionsResponse(
+            [
+                _FakeSessionInfo(
+                    user_session_id="user-cli",
+                    session_id="instance-existing",
+                    endpoint="https://existing.example.com",
+                )
+            ]
+        )
+    ]
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.list_snapshots_call_count == 0
+    assert _FakeToolsClient.resume_snapshot_call_count == 0
+    assert result == {
+        "session_id": "user-cli",
+        "tool_id": "tool-cli",
+        "instance_id": "instance-existing",
+        "endpoint": "https://existing.example.com",
+    }
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {"user-cli": result}
+
+
+def test_ensure_sandbox_session_snapshot_tool_creates_when_no_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-cli",
+        tool_type="CodeEnv",
+        enable_snapshot=True,
+    )
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+    )
+
+    assert _FakeToolsClient.list_sessions_call_count == 1
+    assert _FakeToolsClient.list_snapshots_call_count == 1
+    assert _FakeToolsClient.resume_snapshot_call_count == 0
+    assert _FakeToolsClient.create_call_count == 1
+    assert _FakeToolsClient.last_list_snapshots_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_list_snapshots_request.user_session_id == "user-cli"
+    assert _FakeToolsClient.last_list_snapshots_request.max_results == 1
+    assert result == {
+        "session_id": "user-session-from-api",
+        "tool_id": "tool-cli",
+        "instance_id": "session-from-api",
+        "endpoint": "https://sandbox.example.com",
+    }
+
+
+def test_ensure_sandbox_session_snapshot_tool_restores_first_snapshot(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    import agentkit.toolkit.cli.sandbox.session_create as session_create
+
+    class RestoredGetResponse:
+        user_session_id = "user-cli"
+        session_id = "instance-restored"
+        endpoint = "https://restored.example.com"
+
+    monkeypatch.setattr(
+        session_create,
+        "AgentkitToolsClient",
+        lambda: _FakeToolsClient(),
+    )
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    _patch_tool_store_path(monkeypatch, tmp_path)
+    _FakeToolsClient.get_tool_response = _FakeGetToolResponse(
+        tool_id="tool-cli",
+        tool_type="CodeEnv",
+        enable_snapshot=True,
+    )
+    _FakeToolsClient.list_snapshots_response = _FakeListSessionSnapshotsResponse(
+        [
+            _FakeSnapshot(snapshot_id="snapshot-first"),
+            _FakeSnapshot(snapshot_id="snapshot-second"),
+        ]
+    )
+    _FakeToolsClient.resume_snapshot_response = _FakeResumeSessionFromSnapshotResponse(
+        session_id="instance-restored"
+    )
+    _FakeToolsClient.get_response = RestoredGetResponse()
+
+    result = session_create.ensure_sandbox_session(
+        session_id="user-cli",
+        tool_id="tool-cli",
+        ttl=60,
+    )
+
+    assert _FakeToolsClient.create_call_count == 0
+    assert _FakeToolsClient.list_sessions_call_count == 1
+    assert _FakeToolsClient.list_snapshots_call_count == 1
+    assert _FakeToolsClient.resume_snapshot_call_count == 1
+    assert _FakeToolsClient.get_call_count == 1
+    assert _FakeToolsClient.last_resume_snapshot_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_resume_snapshot_request.snapshot_id == "snapshot-first"
+    assert _FakeToolsClient.last_resume_snapshot_request.ttl == 60
+    assert _FakeToolsClient.last_resume_snapshot_request.create_new_instance is True
+    assert _FakeToolsClient.last_get_request.tool_id == "tool-cli"
+    assert _FakeToolsClient.last_get_request.session_id == "instance-restored"
+    assert result == {
+        "session_id": "user-cli",
+        "tool_id": "tool-cli",
+        "instance_id": "instance-restored",
+        "endpoint": "https://restored.example.com",
+    }
+    assert json.loads(store_path.read_text(encoding="utf-8")) == {"user-cli": result}
+
+
 def test_ensure_sandbox_session_recreates_when_remote_session_missing(
     monkeypatch,
     tmp_path,
@@ -4200,6 +4564,153 @@ def test_cli_exec_connects_to_ws_endpoint(monkeypatch, tmp_path) -> None:
     assert captured["ws_url"] == "ws://sandbox.example.com/v1/shell/ws?token=abc"
     assert captured["initial_command"] is None
     assert captured["on_shell_id"] is not None
+
+
+def test_build_bash_exec_url_preserves_endpoint_query() -> None:
+    from agentkit.toolkit.cli.sandbox.sandbox_client import build_bash_exec_url
+
+    assert (
+        build_bash_exec_url("https://sandbox.example.com/base?token=abc")
+        == "https://sandbox.example.com/base/v1/bash/exec?token=abc"
+    )
+
+
+def test_cli_exec_hot_updates_existing_code_env_model_name(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    store_path = _patch_store_path(monkeypatch, tmp_path)
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    store_path.write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session, is_new=False)
+    monkeypatch.setattr(
+        cli_exec,
+        "_connect_terminal",
+        lambda *_args, **_kwargs: None,
+    )
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["url"] = url
+        captured["json"] = json
+        captured["timeout"] = timeout
+        return _FakeA2AResponse({"data": {"status": "completed", "exit_code": 0}})
+
+    monkeypatch.setattr(cli_exec.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--model-name",
+            "glm-5.2",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["url"] == "https://sandbox.example.com/v1/bash/exec?token=abc"
+    assert captured["timeout"] == cli_exec.CODEX_HOT_UPDATE_TIMEOUT_SECONDS
+    body = captured["json"]
+    assert body["timeout"] == 30
+    assert body["hard_timeout"] == 90
+    assert body["env"]["CODEX_MODEL"] == "glm-5.2"
+    assert 'model = "glm-5.2"' in body["env"]["CODEX_CONFIG_TOML"]
+    assert "REQ_CODEX_CONFIG_TOML" in body["command"]
+
+
+def test_cli_exec_hot_update_model_api_key_maps_all_api_key_envs(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    _patch_store_path(monkeypatch, tmp_path).write_text(
+        json.dumps({"user-1": stored_session}),
+        encoding="utf-8",
+    )
+    _patch_exec_session(monkeypatch, cli_exec, stored_session, is_new=False)
+    monkeypatch.setattr(
+        cli_exec,
+        "_connect_terminal",
+        lambda *_args, **_kwargs: None,
+    )
+    captured = {}
+
+    def fake_post(url, json, timeout):
+        captured["json"] = json
+        return _FakeA2AResponse({"data": {"status": "completed", "exit_code": 0}})
+
+    monkeypatch.setattr(cli_exec.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        [
+            "sandbox",
+            "exec",
+            "--session-id",
+            "user-1",
+            "--model-api-key",
+            "sk-test",
+        ],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert captured["json"]["env"] == {
+        "CODEX_API_KEY": "sk-test",
+        "ARK_API_KEY": "sk-test",
+        "OPENAI_API_KEY": "sk-test",
+    }
+
+
+def test_cli_exec_skips_hot_update_for_new_session(monkeypatch, tmp_path) -> None:
+    from agentkit.toolkit.cli.cli import app
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    stored_session = {
+        "session_id": "user-1",
+        "tool_id": "tool-1",
+        "instance_id": "session-1",
+        "endpoint": "https://sandbox.example.com/?token=abc",
+    }
+    _patch_exec_session(monkeypatch, cli_exec, stored_session, is_new=True)
+    monkeypatch.setattr(
+        cli_exec,
+        "_connect_terminal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_post(*_args, **_kwargs):
+        raise AssertionError("new sessions must not hot update")
+
+    monkeypatch.setattr(cli_exec.requests, "post", fake_post)
+
+    result = runner.invoke(
+        app,
+        ["sandbox", "exec", "--model-name", "glm-5.2"],
+    )
+
+    assert result.exit_code == 0, result.output
 
 
 def test_cli_exec_runs_command_option(monkeypatch, tmp_path) -> None:

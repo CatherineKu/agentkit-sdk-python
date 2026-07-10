@@ -135,6 +135,9 @@ def _build_tool_record(tool: object, tool_type: str) -> dict[str, object] | None
     model_provider = _get_tool_model_provider(payload)
     if model_provider:
         record["ModelProvider"] = model_provider
+    enable_snapshot = _get_field_value(payload, "EnableSnapshot", "enable_snapshot")
+    if enable_snapshot is True:
+        record["EnableSnapshot"] = True
     role_name = _get_string_field(payload, "RoleName", "role_name")
     if isinstance(role_name, str) and role_name.strip():
         record["RoleName"] = role_name.strip()
@@ -263,6 +266,11 @@ def _normalize_tool_record(
     )
     if model_provider:
         stored["ModelProvider"] = model_provider
+    enable_snapshot = result.get("EnableSnapshot")
+    if enable_snapshot is None:
+        enable_snapshot = result.get("enable_snapshot")
+    if enable_snapshot is True:
+        stored["EnableSnapshot"] = True
     role_name = _get_string_value(result, "RoleName", "role_name")
     if role_name:
         stored["RoleName"] = role_name
@@ -311,6 +319,21 @@ def find_tool_result(tool_type: str) -> dict[str, object] | None:
         error(f"Invalid sandbox tool record: {resolved_tool_type}")
 
     return result
+
+
+def is_tool_snapshot_enabled(
+    *,
+    tool_id: Optional[str],
+    tool_type: str | SandboxToolType | None,
+) -> bool:
+    result = find_tool_result(normalize_tool_type(tool_type))
+    if not result:
+        return False
+
+    cached_tool_id = _get_string_value(result, "ToolId", "tool_id")
+    if tool_id and cached_tool_id != tool_id:
+        return False
+    return result.get("EnableSnapshot") is True
 
 
 def find_tool_model_provider(
@@ -470,6 +493,7 @@ def resolve_existing_sandbox_tool_id(
             client,
             explicit_tool_id,
             tool_type=tool_type,
+            save_result=True,
         )
 
     env_tool_id = (os.getenv(env_var_name) or "").strip()
@@ -478,6 +502,7 @@ def resolve_existing_sandbox_tool_id(
             client,
             env_tool_id,
             tool_type=tool_type,
+            save_result=True,
         )
 
     if isinstance(default_tool_id, str) and default_tool_id.strip():
@@ -485,6 +510,7 @@ def resolve_existing_sandbox_tool_id(
             client,
             default_tool_id.strip(),
             tool_type=tool_type,
+            save_result=True,
         )
 
     resolved_tool_type = normalize_tool_type(tool_type)

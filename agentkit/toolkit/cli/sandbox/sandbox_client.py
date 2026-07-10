@@ -25,6 +25,7 @@ from typing import NoReturn
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import typer
+import yaml
 
 try:
     import fcntl
@@ -32,7 +33,9 @@ except ImportError:  # pragma: no cover - fcntl is unavailable on Windows.
     fcntl = None  # type: ignore[assignment]
 
 SANDBOX_SESSION_STORE_PATH = Path(".agentkit") / "sandbox" / "sessions.json"
+SANDBOX_YAML_PATH = Path(".agentkit") / "sandbox" / "sandbox.yaml"
 SANDBOX_EXEC_ROUTE = "/v1/shell/exec"
+SANDBOX_BASH_EXEC_ROUTE = "/v1/bash/exec"
 SANDBOX_TERMINAL_ROUTE = "/v1/shell/ws"
 SANDBOX_FILE_UPLOAD_ROUTE = "/v1/file/upload"
 SANDBOX_FILE_DOWNLOAD_ROUTE = "/v1/file/download"
@@ -60,6 +63,26 @@ def echo_json(payload: object) -> None:
 
 def _get_session_store_path() -> Path:
     return Path.cwd() / SANDBOX_SESSION_STORE_PATH
+
+
+def save_sandbox_yaml(image_url: str, tool_type: str = "Private") -> Path:
+    path = Path.cwd() / SANDBOX_YAML_PATH
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = yaml.safe_dump(
+        {"tool_type": tool_type, "image_url": image_url},
+        sort_keys=False,
+        allow_unicode=True,
+    )
+    tmp_path = path.with_name(
+        f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp"
+    )
+    try:
+        tmp_path.write_text(text, encoding="utf-8")
+        tmp_path.replace(path)
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+    return path
 
 
 @contextmanager
@@ -355,6 +378,20 @@ def build_exec_url(endpoint: object) -> str:
     parts = urlsplit(endpoint.strip())
     path = parts.path.rstrip("/")
     exec_path = f"{path}{SANDBOX_EXEC_ROUTE}" if path else SANDBOX_EXEC_ROUTE
+    return urlunsplit(
+        (parts.scheme, parts.netloc, exec_path, parts.query, parts.fragment)
+    )
+
+
+def build_bash_exec_url(endpoint: object) -> str:
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        error("Sandbox session endpoint is missing")
+
+    parts = urlsplit(endpoint.strip())
+    path = parts.path.rstrip("/")
+    exec_path = (
+        f"{path}{SANDBOX_BASH_EXEC_ROUTE}" if path else SANDBOX_BASH_EXEC_ROUTE
+    )
     return urlunsplit(
         (parts.scheme, parts.netloc, exec_path, parts.query, parts.fragment)
     )

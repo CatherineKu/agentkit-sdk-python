@@ -22,22 +22,32 @@ from agentkit.client import BaseAgentkitClient
 from .types import (
     CreateSessionRequest,
     CreateSessionResponse,
+    CreateSessionSnapshotRequest,
+    CreateSessionSnapshotResponse,
     CreateToolRequest,
     CreateToolResponse,
     DeleteSessionRequest,
     DeleteSessionResponse,
+    DeleteSessionSnapshotRequest,
+    DeleteSessionSnapshotResponse,
     DeleteToolRequest,
     DeleteToolResponse,
     GetSessionLogsRequest,
     GetSessionLogsResponse,
     GetSessionRequest,
     GetSessionResponse,
+    GetSessionSnapshotRequest,
+    GetSessionSnapshotResponse,
     GetToolRequest,
     GetToolResponse,
+    ListSessionSnapshotsRequest,
+    ListSessionSnapshotsResponse,
     ListSessionsRequest,
     ListSessionsResponse,
     ListToolsRequest,
     ListToolsResponse,
+    ResumeSessionFromSnapshotRequest,
+    ResumeSessionFromSnapshotResponse,
     SetSessionTtlRequest,
     SetSessionTtlResponse,
     UpdateToolRequest,
@@ -47,16 +57,22 @@ from .types import (
 
 class AgentkitToolsClient(BaseAgentkitClient):
     """AgentKit Tools Management Service"""
+
     API_ACTIONS: Dict[str, str] = {
         "CreateSession": "CreateSession",
+        "CreateSessionSnapshot": "CreateSessionSnapshot",
         "CreateTool": "CreateTool",
         "DeleteSession": "DeleteSession",
+        "DeleteSessionSnapshot": "DeleteSessionSnapshot",
         "DeleteTool": "DeleteTool",
         "GetSession": "GetSession",
         "GetSessionLogs": "GetSessionLogs",
+        "GetSessionSnapshot": "GetSessionSnapshot",
         "GetTool": "GetTool",
+        "ListSessionSnapshots": "ListSessionSnapshots",
         "ListSessions": "ListSessions",
         "ListTools": "ListTools",
+        "ResumeSessionFromSnapshot": "ResumeSessionFromSnapshot",
         "SetSessionTtl": "SetSessionTtl",
         "UpdateTool": "UpdateTool",
     }
@@ -76,12 +92,20 @@ class AgentkitToolsClient(BaseAgentkitClient):
             service_name="tools",
         )
 
-
     def create_session(self, request: CreateSessionRequest) -> CreateSessionResponse:
         return self._invoke_api(
             api_action="CreateSession",
             request=request,
             response_type=CreateSessionResponse,
+        )
+
+    def create_session_snapshot(
+        self, request: CreateSessionSnapshotRequest
+    ) -> CreateSessionSnapshotResponse:
+        return self._invoke_api(
+            api_action="CreateSessionSnapshot",
+            request=request,
+            response_type=CreateSessionSnapshotResponse,
         )
 
     def create_tool(self, request: CreateToolRequest) -> CreateToolResponse:
@@ -98,6 +122,15 @@ class AgentkitToolsClient(BaseAgentkitClient):
             response_type=DeleteSessionResponse,
         )
 
+    def delete_session_snapshot(
+        self, request: DeleteSessionSnapshotRequest
+    ) -> DeleteSessionSnapshotResponse:
+        return self._invoke_api(
+            api_action="DeleteSessionSnapshot",
+            request=request,
+            response_type=DeleteSessionSnapshotResponse,
+        )
+
     def delete_tool(self, request: DeleteToolRequest) -> DeleteToolResponse:
         return self._invoke_api(
             api_action="DeleteTool",
@@ -112,11 +145,22 @@ class AgentkitToolsClient(BaseAgentkitClient):
             response_type=GetSessionResponse,
         )
 
-    def get_session_logs(self, request: GetSessionLogsRequest) -> GetSessionLogsResponse:
+    def get_session_logs(
+        self, request: GetSessionLogsRequest
+    ) -> GetSessionLogsResponse:
         return self._invoke_api(
             api_action="GetSessionLogs",
             request=request,
             response_type=GetSessionLogsResponse,
+        )
+
+    def get_session_snapshot(
+        self, request: GetSessionSnapshotRequest
+    ) -> GetSessionSnapshotResponse:
+        return self._invoke_api(
+            api_action="GetSessionSnapshot",
+            request=request,
+            response_type=GetSessionSnapshotResponse,
         )
 
     def get_tool(self, request: GetToolRequest) -> GetToolResponse:
@@ -124,6 +168,15 @@ class AgentkitToolsClient(BaseAgentkitClient):
             api_action="GetTool",
             request=request,
             response_type=GetToolResponse,
+        )
+
+    def list_session_snapshots(
+        self, request: ListSessionSnapshotsRequest
+    ) -> ListSessionSnapshotsResponse:
+        return self._invoke_api(
+            api_action="ListSessionSnapshots",
+            request=request,
+            response_type=ListSessionSnapshotsResponse,
         )
 
     def list_sessions(self, request: ListSessionsRequest) -> ListSessionsResponse:
@@ -138,6 +191,15 @@ class AgentkitToolsClient(BaseAgentkitClient):
             api_action="ListTools",
             request=request,
             response_type=ListToolsResponse,
+        )
+
+    def resume_session_from_snapshot(
+        self, request: ResumeSessionFromSnapshotRequest
+    ) -> ResumeSessionFromSnapshotResponse:
+        return self._invoke_api(
+            api_action="ResumeSessionFromSnapshot",
+            request=request,
+            response_type=ResumeSessionFromSnapshotResponse,
         )
 
     def set_session_ttl(self, request: SetSessionTtlRequest) -> SetSessionTtlResponse:
