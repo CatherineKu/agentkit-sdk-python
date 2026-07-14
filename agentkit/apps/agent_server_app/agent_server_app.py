@@ -76,6 +76,10 @@ def _is_veadk_short_term_memory(value: Any) -> bool:
     return ShortTermMemory is not None and isinstance(value, ShortTermMemory)
 
 
+def _is_veadk_agent(value: Any) -> bool:
+    return VeadkAgent is not None and isinstance(value, VeadkAgent)
+
+
 def _resolve_session_service(
     short_term_memory: BaseSessionService | Any | None,
 ) -> BaseSessionService:
@@ -92,11 +96,39 @@ def _resolve_session_service(
 
 
 def _resolve_memory_service(root_agent: BaseAgent) -> Any:
-    if VeadkAgent is not None and isinstance(root_agent, VeadkAgent):
+    if _is_veadk_agent(root_agent):
         long_term_memory = getattr(root_agent, "long_term_memory", None)
         if long_term_memory:
             return long_term_memory
     return InMemoryMemoryService()
+
+
+def _create_a2a_runner(
+    *,
+    root_agent: BaseAgent,
+    short_term_memory: BaseSessionService | Any | None,
+    session_service: BaseSessionService,
+    memory_service: Any,
+    artifact_service: InMemoryArtifactService,
+    credential_service: InMemoryCredentialService,
+) -> Any:
+    if VeadkRunner is not None and (
+        _is_veadk_agent(root_agent) or _is_veadk_short_term_memory(short_term_memory)
+    ):
+        return VeadkRunner(
+            agent=root_agent,
+            short_term_memory=short_term_memory
+            if _is_veadk_short_term_memory(short_term_memory)
+            else None,
+        )
+    return Runner(
+        agent=root_agent,
+        app_name=root_agent.name,
+        session_service=session_service,
+        memory_service=memory_service,
+        artifact_service=artifact_service,
+        credential_service=credential_service,
+    )
 
 
 async def _call_lifecycle_handler(handler: Any) -> None:
@@ -206,17 +238,14 @@ class AgentkitAgentServerApp(BaseAgentkitApp):
             agents_dir=".",
         )
 
-        if _is_veadk_short_term_memory(short_term_memory) and VeadkRunner is not None:
-            runner = VeadkRunner(agent=root_agent, short_term_memory=short_term_memory)
-        else:
-            runner = Runner(
-                agent=root_agent,
-                app_name=root_agent.name,
-                session_service=session_service,
-                memory_service=memory_service,
-                artifact_service=_artifact_service,
-                credential_service=_credential_service,
-            )
+        runner = _create_a2a_runner(
+            root_agent=root_agent,
+            short_term_memory=short_term_memory,
+            session_service=session_service,
+            memory_service=memory_service,
+            artifact_service=_artifact_service,
+            credential_service=_credential_service,
+        )
         _a2a_server_app = to_a2a(agent=root_agent, runner=runner)
 
         @asynccontextmanager

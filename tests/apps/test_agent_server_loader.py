@@ -35,6 +35,7 @@ from google.adk.sessions.in_memory_session_service import InMemorySessionService
 from agentkit.apps.agent_server_app.agent_server_app import (
     AgentKitAgentLoader,
     AgentkitAgentServerApp,
+    _create_a2a_runner,
     _resolve_memory_service,
     _resolve_session_service,
 )
@@ -215,6 +216,18 @@ def test_resolve_session_service_accepts_adk_session_service_instance():
     assert _resolve_session_service(session_service) is session_service
 
 
+def test_server_app_ctor_accepts_adk_session_service_for_plain_adk_agent():
+    session_service = InMemorySessionService()
+    agent = BaseAgent(name="plain_adk_session_service_agent")
+
+    server = AgentkitAgentServerApp(
+        agent=agent,
+        short_term_memory=session_service,
+    )
+
+    assert server.server.session_service is session_service
+
+
 def test_resolve_memory_service_preserves_veadk_long_term_memory(monkeypatch):
     class _FakeVeadkAgent:
         def __init__(self):
@@ -239,6 +252,164 @@ def test_resolve_session_service_rejects_invalid_memory_object():
         _resolve_session_service(object())
 
     assert "short_term_memory must be" in str(exc_info.value)
+
+
+def test_resolve_session_service_rejects_duck_typed_session_service_wrapper():
+    class _DuckTypedMemoryWrapper:
+        session_service = InMemorySessionService()
+
+    with pytest.raises(TypeError) as exc_info:
+        _resolve_session_service(_DuckTypedMemoryWrapper())
+
+    assert "short_term_memory must be" in str(exc_info.value)
+
+
+def test_create_a2a_runner_preserves_veadk_runner_for_veadk_agent_with_session_service(
+    monkeypatch,
+):
+    calls = []
+
+    class _FakeVeadkRunner:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(agent_server_module, "VeadkAgent", BaseAgent)
+    monkeypatch.setattr(agent_server_module, "VeadkRunner", _FakeVeadkRunner)
+
+    root_agent = BaseAgent(name="legacy_session_agent")
+    session_service = InMemorySessionService()
+
+    runner = _create_a2a_runner(
+        root_agent=root_agent,
+        short_term_memory=session_service,
+        session_service=session_service,
+        memory_service=object(),
+        artifact_service=object(),
+        credential_service=object(),
+    )
+
+    assert isinstance(runner, _FakeVeadkRunner)
+    assert calls == [{"agent": root_agent, "short_term_memory": None}]
+
+
+def test_create_a2a_runner_uses_adk_runner_for_plain_adk_agent_with_session_service(
+    monkeypatch,
+):
+    calls = []
+
+    class _FakeVeadkAgent:
+        pass
+
+    class _FakeVeadkRunner:
+        pass
+
+    class _FakeAdkRunner:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(agent_server_module, "VeadkAgent", _FakeVeadkAgent)
+    monkeypatch.setattr(agent_server_module, "VeadkRunner", _FakeVeadkRunner)
+    monkeypatch.setattr(agent_server_module, "Runner", _FakeAdkRunner)
+
+    root_agent = BaseAgent(name="plain_adk_with_session_agent")
+    session_service = InMemorySessionService()
+    memory_service = object()
+    artifact_service = object()
+    credential_service = object()
+
+    runner = _create_a2a_runner(
+        root_agent=root_agent,
+        short_term_memory=session_service,
+        session_service=session_service,
+        memory_service=memory_service,
+        artifact_service=artifact_service,
+        credential_service=credential_service,
+    )
+
+    assert isinstance(runner, _FakeAdkRunner)
+    assert calls == [
+        {
+            "agent": root_agent,
+            "app_name": "plain_adk_with_session_agent",
+            "session_service": session_service,
+            "memory_service": memory_service,
+            "artifact_service": artifact_service,
+            "credential_service": credential_service,
+        }
+    ]
+
+
+def test_create_a2a_runner_preserves_veadk_runner_for_veadk_agent_without_memory(
+    monkeypatch,
+):
+    calls = []
+
+    class _FakeVeadkRunner:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(agent_server_module, "VeadkAgent", BaseAgent)
+    monkeypatch.setattr(agent_server_module, "VeadkRunner", _FakeVeadkRunner)
+
+    root_agent = BaseAgent(name="veadk_agent_without_memory")
+    session_service = InMemorySessionService()
+
+    runner = _create_a2a_runner(
+        root_agent=root_agent,
+        short_term_memory=None,
+        session_service=session_service,
+        memory_service=object(),
+        artifact_service=object(),
+        credential_service=object(),
+    )
+
+    assert isinstance(runner, _FakeVeadkRunner)
+    assert calls == [{"agent": root_agent, "short_term_memory": None}]
+
+
+def test_create_a2a_runner_uses_adk_runner_for_new_default_adk_agent(monkeypatch):
+    calls = []
+
+    class _FakeVeadkAgent:
+        pass
+
+    class _FakeVeadkRunner:
+        pass
+
+    class _FakeAdkRunner:
+        def __init__(self, **kwargs):
+            calls.append(kwargs)
+
+    monkeypatch.setattr(agent_server_module, "VeadkAgent", _FakeVeadkAgent)
+    monkeypatch.setattr(agent_server_module, "VeadkRunner", _FakeVeadkRunner)
+    monkeypatch.setattr(agent_server_module, "Runner", _FakeAdkRunner)
+
+    root_agent = BaseAgent(name="new_default_adk_agent")
+    session_service = InMemorySessionService()
+    memory_service = object()
+    artifact_service = object()
+    credential_service = object()
+
+    runner = _create_a2a_runner(
+        root_agent=root_agent,
+        short_term_memory=None,
+        session_service=session_service,
+        memory_service=memory_service,
+        artifact_service=artifact_service,
+        credential_service=credential_service,
+    )
+
+    assert isinstance(runner, _FakeAdkRunner)
+    assert calls == [
+        {
+            "agent": root_agent,
+            "app_name": "new_default_adk_agent",
+            "session_service": session_service,
+            "memory_service": memory_service,
+            "artifact_service": artifact_service,
+            "credential_service": credential_service,
+        }
+    ]
 
 
 def test_server_app_ctor_raises_type_error_when_both_agent_and_app_provided():
