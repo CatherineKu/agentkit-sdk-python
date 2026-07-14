@@ -68,6 +68,7 @@ def test_default_stream_uses_final_updates_without_partial_tokens():
     class FakeGraph:
         async def astream(self, payload, stream_mode=None):
             assert stream_mode == "updates"
+            yield ("updates", {"route": "handoff"})
             yield ("updates", {"classify": {"route": "handoff"}})
             yield ("updates", {"finalize": {"final": "final answer"}})
 
@@ -100,6 +101,7 @@ def test_stream_nodes_emit_matching_message_chunks_as_deltas():
             assert version == "v2"
             yield ("messages", (SimpleNamespace(content="ignore"), {"langgraph_node": "classify"}))
             yield ("messages", (SimpleNamespace(content="a"), {"langgraph_node": "final_answer"}))
+            yield ("messages", (SimpleNamespace(content="ab"), {"langgraph_node": "final_answer"}))
             yield ("messages", (SimpleNamespace(content="ab"), {"langgraph_node": "final_answer"}))
 
     events = _collect_events(
@@ -157,6 +159,7 @@ def test_stream_nodes_ignore_message_chunks_without_matching_metadata():
             del payload, version
             assert stream_mode == ["messages", "updates"]
             yield ("messages", (SimpleNamespace(content="no metadata"), {}))
+            yield {"type": "messages", "data": {"metadata": "bad", "content": "bad metadata"}}
             yield ("messages", (SimpleNamespace(content="wrong node"), {"langgraph_node": "classify"}))
             yield ("updates", {"finalize": {"final": "safe final"}})
 
@@ -1117,6 +1120,25 @@ def test_sync_stream_retries_legacy_signature_and_raises_after_emitting():
         _collect_events(
             LangGraphAgentkitBridge(BrokenAfterEmitGraph(), name="lg_sync_broken"),
         )
+
+
+def test_sync_stream_raises_last_signature_error_when_all_attempts_fail_before_emit():
+    class IncompatibleSyncGraph:
+        def __init__(self):
+            self.calls = 0
+
+        def stream(self, payload, **kwargs):
+            del payload, kwargs
+            self.calls += 1
+            raise TypeError(f"signature mismatch {self.calls}")
+            yield None
+
+    graph = IncompatibleSyncGraph()
+
+    with pytest.raises(TypeError, match="signature mismatch 3"):
+        _collect_events(LangGraphAgentkitBridge(graph, name="lg_bad_sync_signature"))
+
+    assert graph.calls == 3
 
 
 def test_stream_mode_fallback_only_handles_call_signature_errors():

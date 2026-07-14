@@ -32,6 +32,7 @@ from agentkit.apps.langgraph_server_app.langgraph_server_app import (
     _normalize_import_path,
     _resolve_graph_id,
     _stream_chunk,
+    _stream_message_text,
     _update_output_text,
 )
 
@@ -224,6 +225,7 @@ def test_helper_functions_cover_path_and_payload_boundaries(tmp_path):
     assert normalized["graphs"]["dict_graph"]["path"] == f"{tmp_path / 'dict_graph.py'}:graph"
     assert normalized["graphs"]["bad_graph"] == 1
     assert _resolve_graph_id({"graphs": {"one": "pkg:graph"}}, None) == "one"
+    assert _resolve_graph_id({"graphs": {"one": "pkg:graph"}}, "one") == "one"
     with pytest.raises(ValueError, match="at least one graph"):
         _resolve_graph_id({"graphs": {}}, None)
     with pytest.raises(ValueError, match="was not found"):
@@ -232,6 +234,10 @@ def test_helper_functions_cover_path_and_payload_boundaries(tmp_path):
     assert _content_text("plain input") == "plain input"
     assert _content_text({"text": "dict text"}) == "dict text"
     assert _content_text({"content": "dict content"}) == "dict content"
+    assert (
+        _content_text(SimpleNamespace(parts=[SimpleNamespace(text="object part")]))
+        == "object part"
+    )
     assert _input_payload("hello", "question") == {"question": "hello"}
     assert _update_output_text("plain") == "plain"
     assert _update_output_text({"node": {"answer": "nested"}}) == "nested"
@@ -271,9 +277,18 @@ def test_text_extraction_helpers_cover_supported_chunk_shapes():
 
     assert _interrupt_payload("not dict") is None
     assert _interrupt_payload({"__interrupt__": []}) == []
+    assert _interrupt_payload(
+        {"__interrupt__": [SimpleNamespace(id="circular", value=circular)]}
+    ) == [
+        {"id": "circular", "value": "[[...]]"}
+    ]
     assert _message_candidates({"messages": ("a", "b")}) == ["a", "b"]
     assert _message_candidates(("a", "b")) == ["a", "b"]
     assert _message_candidates("one") == ["one"]
+    assert (
+        _stream_message_text([SimpleNamespace(type="ai", content="object ai")])
+        == "object ai"
+    )
 
 
 def test_materialize_lazy_graph_exports_supports_module_getattr(monkeypatch):
@@ -294,17 +309,30 @@ def test_materialize_lazy_graph_exports_supports_module_getattr(monkeypatch):
 
 def test_materialize_lazy_graph_exports_ignores_file_paths_and_missing_attrs(monkeypatch):
     module = py_types.ModuleType("empty_graph_module")
+    module.existing_graph = object()
     monkeypatch.setitem(sys.modules, "empty_graph_module", module)
 
+    _materialize_lazy_graph_exports("not-a-dict")
     _materialize_lazy_graph_exports(
         {
             "file": "./graph.py:make_graph",
+            "no_colon": "empty_graph_module",
+            "already_present": "empty_graph_module:existing_graph",
+            "dict_without_path": {"description": "demo"},
             "missing": {"path": "empty_graph_module:missing_graph"},
             "missing_module": "missing_graph_module:make_graph",
         }
     )
 
     assert "missing_graph" not in module.__dict__
+
+
+def test_dotenv_loader_skips_existing_env_file_when_dotenv_is_missing(tmp_path, monkeypatch):
+    env_file = tmp_path / ".env"
+    env_file.write_text("FROM_DOTENV=loaded\n", encoding="utf-8")
+    monkeypatch.setitem(sys.modules, "dotenv.main", None)
+
+    assert _load_dotenv(env_file) == {}
 
 
 def test_langgraph_server_app_prepares_env_and_mounts_agentkit_routes(tmp_path, monkeypatch):
