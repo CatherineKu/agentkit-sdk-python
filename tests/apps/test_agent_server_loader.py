@@ -30,11 +30,15 @@ from __future__ import annotations
 import pytest
 from google.adk.agents.base_agent import BaseAgent
 from google.adk.apps.app import App
+from google.adk.sessions.in_memory_session_service import InMemorySessionService
 
 from agentkit.apps.agent_server_app.agent_server_app import (
     AgentKitAgentLoader,
     AgentkitAgentServerApp,
+    _resolve_memory_service,
+    _resolve_session_service,
 )
+import agentkit.apps.agent_server_app.agent_server_app as agent_server_module
 
 
 # ---------------------------------------------------------------------------
@@ -197,11 +201,44 @@ def test_loader_with_app_list_agents_detailed_reports_app_and_root_names():
 # (agent_server_app.py:115-123). Each guard raises before any AdkWebServer /
 # A2A construction, so plain truthy sentinels are enough to trip them.
 # ===========================================================================
-def test_server_app_ctor_raises_type_error_when_short_term_memory_is_none():
-    with pytest.raises(TypeError) as exc_info:
-        AgentkitAgentServerApp(agent=object(), short_term_memory=None)
+def test_server_app_ctor_defaults_to_adk_in_memory_session_service():
+    agent = BaseAgent(name="default_memory_agent")
 
-    assert "short_term_memory is required" in str(exc_info.value)
+    server = AgentkitAgentServerApp(agent=agent)
+
+    assert isinstance(server.server.session_service, InMemorySessionService)
+
+
+def test_resolve_session_service_accepts_adk_session_service_instance():
+    session_service = InMemorySessionService()
+
+    assert _resolve_session_service(session_service) is session_service
+
+
+def test_resolve_memory_service_preserves_veadk_long_term_memory(monkeypatch):
+    class _FakeVeadkAgent:
+        def __init__(self):
+            self.long_term_memory = object()
+
+    monkeypatch.setattr(agent_server_module, "VeadkAgent", _FakeVeadkAgent)
+    agent = _FakeVeadkAgent()
+
+    assert _resolve_memory_service(agent) is agent.long_term_memory
+
+
+def test_apps_lazy_import_exposes_langgraph_server_app():
+    from agentkit import apps
+
+    assert apps.AgentkitLangGraphServerApp.__name__ == "AgentkitLangGraphServerApp"
+    with pytest.raises(AttributeError):
+        getattr(apps, "MissingApp")
+
+
+def test_resolve_session_service_rejects_invalid_memory_object():
+    with pytest.raises(TypeError) as exc_info:
+        _resolve_session_service(object())
+
+    assert "short_term_memory must be" in str(exc_info.value)
 
 
 def test_server_app_ctor_raises_type_error_when_both_agent_and_app_provided():
