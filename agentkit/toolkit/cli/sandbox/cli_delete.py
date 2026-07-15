@@ -24,6 +24,12 @@ from rich.panel import Panel
 from rich.table import Table
 
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.tool_lookup import (
+    field_value as _field_value,
+    list_tools_by_name,
+    print_tool_matches,
+    string_field as _string_field,
+)
 from agentkit.toolkit.cli.sandbox.agentkit_client import AgentkitToolsClient
 from agentkit.toolkit.cli.sandbox.sandbox_client import delete_session_result, error
 from agentkit.toolkit.cli.sandbox.session_create import SANDBOX_TOOL_ID_ENV
@@ -49,27 +55,6 @@ SESSION_INFO_FIELDS = (
     ("CreatedAt", "created_at"),
     ("ExpireAt", "expire_at"),
 )
-
-
-def _field_value(source: object, *keys: str) -> object:
-    for key in keys:
-        if isinstance(source, dict):
-            value = source.get(key)
-            result = source.get("Result")
-            if value is None and isinstance(result, dict):
-                value = result.get(key)
-        else:
-            value = getattr(source, key, None)
-        if value is not None:
-            return value
-    return None
-
-
-def _string_field(source: object, *keys: str) -> str | None:
-    value = _field_value(source, *keys)
-    if isinstance(value, str) and value.strip():
-        return value.strip()
-    return None
 
 
 def _model_dump(source: object) -> dict[str, object]:
@@ -133,20 +118,10 @@ def _get_tool(client: AgentkitToolsClient, tool_id: str) -> object:
 
 
 def _list_tools_by_name(client: AgentkitToolsClient, tool_name: str) -> list[object]:
-    request = tools_types.ListToolsRequest(
-        filters=[
-            tools_types.FiltersItemForListTools(
-                name="Name",
-                values=[tool_name],
-            )
-        ],
-        max_results=100,
-    )
     try:
-        response = client.list_tools(request)
+        return list_tools_by_name(client, tool_name)
     except Exception as exc:
         error(f"Failed to list sandbox tools by name {tool_name}: {exc}")
-    return list(response.tools or [])
 
 
 def _resolve_tool(
@@ -169,19 +144,11 @@ def _resolve_tool(
     if not matches:
         error(f"Sandbox tool not found by name: {explicit_tool_name}")
     if len(matches) > 1:
-        table = Table(title=f"Multiple sandbox tools matched: {explicit_tool_name}")
-        table.add_column("ToolId", style="cyan")
-        table.add_column("Name")
-        table.add_column("Status")
-        table.add_column("ToolType")
-        for item in matches:
-            table.add_row(
-                _string_field(item, "ToolId", "tool_id") or "",
-                _string_field(item, "Name", "name") or "",
-                _string_field(item, "Status", "status") or "",
-                _string_field(item, "ToolType", "tool_type") or "",
-            )
-        console.print(table)
+        print_tool_matches(
+            explicit_tool_name,
+            matches,
+            title=f"Multiple sandbox tools matched: {explicit_tool_name}",
+        )
         error("Multiple sandbox tools matched --tool-name. Retry with --tool-id.")
 
     resolved_tool_id = _string_field(matches[0], "ToolId", "tool_id")

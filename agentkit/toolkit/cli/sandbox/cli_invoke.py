@@ -35,10 +35,10 @@ from agentkit.toolkit.cli.sandbox.a2a_client import (
 )
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
+    config_default_if_unprovided,
     config_default_int,
-    config_default_str,
+    config_tool_id_default_if_unprovided,
     configured_sandbox_config,
-    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.env_config import (
     MODEL_AGENT_ENV_KEYS as _MODEL_AGENT_ENV_KEYS,
@@ -320,42 +320,47 @@ def invoke_command(
     """Invoke a sandbox A2A agent."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
-        if not param_was_provided(ctx, "ttl"):
-            ttl = config_default_int("ttl", data=config_defaults) or ttl
-        if not param_was_provided(ctx, "model_name"):
-            model_name = (
-                config_default_str("model-name", data=config_defaults) or model_name
-            )
-        if not param_was_provided(ctx, "model_provider"):
-            model_provider = (
-                config_default_str("model-provider", data=config_defaults)
-                or model_provider
-            )
-        if not param_was_provided(ctx, "model_base_url"):
-            model_base_url = (
-                config_default_str("model-base-url", data=config_defaults)
-                or model_base_url
-            )
-        if not param_was_provided(ctx, "model_api_key"):
-            model_api_key = (
-                config_default_str("model-api-key", data=config_defaults)
-                or model_api_key
-            )
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
+        ttl = config_default_if_unprovided(
+            ctx, "ttl", "ttl", ttl, data=config_defaults, getter=config_default_int
+        )
+        model_name = config_default_if_unprovided(
+            ctx, "model_name", "model-name", model_name, data=config_defaults
+        )
+        model_provider = config_default_if_unprovided(
+            ctx,
+            "model_provider",
+            "model-provider",
+            model_provider,
+            data=config_defaults,
+        )
+        model_base_url = config_default_if_unprovided(
+            ctx,
+            "model_base_url",
+            "model-base-url",
+            model_base_url,
+            data=config_defaults,
+        )
+        model_api_key = config_default_if_unprovided(
+            ctx,
+            "model_api_key",
+            "model-api-key",
+            model_api_key,
+            data=config_defaults,
+        )
 
         resolved_task_id = (task_id or "").strip()
         resolved_prompt = (prompt or "").strip()

@@ -31,9 +31,8 @@ from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.agentkit_client import AgentkitToolsClient
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
-    config_default_str,
+    config_default_if_unprovided,
     configured_sandbox_config,
-    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.session_create import SANDBOX_TOOL_ID_ENV
 from agentkit.toolkit.cli.sandbox.session_sync import sync_remote_sessions
@@ -325,10 +324,9 @@ def mount_command(
     """Open the sandbox session TOS path in TOS Browser."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
         if not session_id:
             error("--session-id is required")
         resolved_session_id = _resolve_required(session_id, "--session-id")

@@ -23,19 +23,20 @@ from pathlib import Path
 from typing import NoReturn, Optional
 
 import typer
-import yaml
 
 from agentkit.platform import VolcConfiguration
 from agentkit.sdk.tools.client import AgentkitToolsClient
 from agentkit.sdk.tools import types as tools_types
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
+    config_default_if_unprovided,
     config_default_bool,
     config_default_int,
     config_default_list,
     config_default_str,
+    get_legacy_sandbox_config_path,
     configured_sandbox_config,
-    param_was_provided,
+    load_legacy_sandbox_image_defaults,
     save_created_tool_config,
 )
 from agentkit.toolkit.cli.sandbox.env_config import (
@@ -58,7 +59,6 @@ from agentkit.toolkit.cli.sandbox.tos_config import (
     build_create_tool_tos_mount_config,
 )
 from agentkit.toolkit.cli.sandbox.sandbox_client import error
-from agentkit.toolkit.cli.sandbox.sandbox_client import SANDBOX_YAML_PATH
 from agentkit.toolkit.volcengine.services.tos_service import (
     TOSService,
     TOSServiceConfig,
@@ -79,37 +79,7 @@ TOOL_WAIT_TIMEOUT_SECONDS = 600
 
 
 def _get_sandbox_yaml_path() -> Path:
-    return Path.cwd() / SANDBOX_YAML_PATH
-
-
-def _load_sandbox_yaml_defaults() -> tuple[str, str] | None:
-    path = _get_sandbox_yaml_path()
-    if not path.exists():
-        return None
-
-    try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError as exc:
-        error(f"Invalid {SANDBOX_YAML_PATH}: {exc}")
-    except OSError as exc:
-        error(f"Failed to read {SANDBOX_YAML_PATH}: {exc}")
-
-    if not isinstance(payload, dict):
-        error(f"Invalid {SANDBOX_YAML_PATH}: expected a YAML mapping")
-
-    raw_tool_type = payload.get("tool_type")
-    raw_image_url = payload.get("image_url")
-    if not isinstance(raw_tool_type, str) or not raw_tool_type.strip():
-        error(f"Invalid {SANDBOX_YAML_PATH}: tool_type must be a non-empty string")
-    if not isinstance(raw_image_url, str) or not raw_image_url.strip():
-        error(f"Invalid {SANDBOX_YAML_PATH}: image_url must be a non-empty string")
-
-    tool_type = _validate_tool_type(raw_tool_type)
-    image_url = raw_image_url.strip()
-    if tool_type == PRIVATE_TOOL_TYPE and not image_url:
-        error(f"Invalid {SANDBOX_YAML_PATH}: image_url is required for Private tools")
-
-    return tool_type, image_url
+    return get_legacy_sandbox_config_path()
 
 
 def _resolve_create_tool_image_defaults(
@@ -120,7 +90,10 @@ def _resolve_create_tool_image_defaults(
     if tool_type is not None or image_url is not None:
         return tool_type or DEFAULT_CREATE_TOOL_TYPE, image_url
 
-    defaults = _load_sandbox_yaml_defaults()
+    defaults = load_legacy_sandbox_image_defaults(
+        path=_get_sandbox_yaml_path(),
+        validate=True,
+    )
     if defaults is None:
         return DEFAULT_CREATE_TOOL_TYPE, image_url
 
@@ -677,92 +650,108 @@ def create_command(
     result = None
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "tool_type"):
-            tool_type = (
-                config_default_str("tool-type", data=config_defaults) or tool_type
-            )
-        if not param_was_provided(ctx, "tool_name"):
-            tool_name = (
-                config_default_str("tool-name", data=config_defaults) or tool_name
-            )
-        if not param_was_provided(ctx, "tos_bucket"):
-            tos_bucket = (
-                config_default_str("tos-bucket", data=config_defaults) or tos_bucket
-            )
-        if not param_was_provided(ctx, "tos_mount"):
-            tos_mount = (
-                config_default_str("tos-mount", data=config_defaults) or tos_mount
-            )
-        if not param_was_provided(ctx, "cpu"):
-            cpu = config_default_int("cpu", data=config_defaults) or cpu
-        if not param_was_provided(ctx, "model_name"):
-            model_name = (
-                config_default_str("model-name", data=config_defaults) or model_name
-            )
-        if not param_was_provided(ctx, "model_api_key"):
-            model_api_key = (
-                config_default_str("model-api-key", data=config_defaults)
-                or model_api_key
-            )
-        if not param_was_provided(ctx, "model_provider"):
-            model_provider = (
-                config_default_str("model-provider", data=config_defaults)
-                or model_provider
-            )
-        if not param_was_provided(ctx, "model_base_url"):
-            model_base_url = (
-                config_default_str("model-base-url", data=config_defaults)
-                or model_base_url
-            )
-        if not param_was_provided(ctx, "websearch_apikey"):
-            websearch_apikey = (
-                config_default_str("websearch-apikey", data=config_defaults)
-                or websearch_apikey
-            )
-        if not param_was_provided(ctx, "image_url"):
-            image_url = (
-                config_default_str("image-url", data=config_defaults) or image_url
-            )
-        if not param_was_provided(ctx, "enable_snapshot"):
-            configured_snapshot = config_default_bool(
-                "enable-snapshot",
-                data=config_defaults,
-            )
-            if configured_snapshot is not None:
-                enable_snapshot = configured_snapshot
-        if not param_was_provided(ctx, "network_enable_public"):
-            configured_public = config_default_bool(
-                "network-enable-public",
-                data=config_defaults,
-            )
-            if configured_public is not None:
-                network_enable_public = configured_public
-        if not param_was_provided(ctx, "network_enable_private"):
-            configured_private = config_default_bool(
-                "network-enable-private",
-                data=config_defaults,
-            )
-            if configured_private is not None:
-                network_enable_private = configured_private
-        if not param_was_provided(ctx, "network_enable_shared_internet"):
-            configured_shared_internet = config_default_bool(
-                "network-enable-shared-internet",
-                data=config_defaults,
-            )
-            if configured_shared_internet is not None:
-                network_enable_shared_internet = configured_shared_internet
-        if not param_was_provided(ctx, "network_vpc_id"):
-            network_vpc_id = (
-                config_default_str("network-vpc-id", data=config_defaults)
-                or network_vpc_id
-            )
-        if not param_was_provided(ctx, "network_subnet_ids"):
-            configured_subnet_ids = config_default_list(
-                "network-subnet-ids",
-                data=config_defaults,
-            )
-            if configured_subnet_ids:
-                network_subnet_ids = ",".join(configured_subnet_ids)
+        tool_type = config_default_if_unprovided(
+            ctx, "tool_type", "tool-type", tool_type, data=config_defaults
+        )
+        tool_name = config_default_if_unprovided(
+            ctx, "tool_name", "tool-name", tool_name, data=config_defaults
+        )
+        tos_bucket = config_default_if_unprovided(
+            ctx, "tos_bucket", "tos-bucket", tos_bucket, data=config_defaults
+        )
+        tos_mount = config_default_if_unprovided(
+            ctx, "tos_mount", "tos-mount", tos_mount, data=config_defaults
+        )
+        cpu = config_default_if_unprovided(
+            ctx,
+            "cpu",
+            "cpu",
+            cpu,
+            data=config_defaults,
+            getter=config_default_int,
+        )
+        model_name = config_default_if_unprovided(
+            ctx, "model_name", "model-name", model_name, data=config_defaults
+        )
+        model_api_key = config_default_if_unprovided(
+            ctx,
+            "model_api_key",
+            "model-api-key",
+            model_api_key,
+            data=config_defaults,
+        )
+        model_provider = config_default_if_unprovided(
+            ctx,
+            "model_provider",
+            "model-provider",
+            model_provider,
+            data=config_defaults,
+        )
+        model_base_url = config_default_if_unprovided(
+            ctx,
+            "model_base_url",
+            "model-base-url",
+            model_base_url,
+            data=config_defaults,
+        )
+        websearch_apikey = config_default_if_unprovided(
+            ctx,
+            "websearch_apikey",
+            "websearch-apikey",
+            websearch_apikey,
+            data=config_defaults,
+        )
+        image_url = config_default_if_unprovided(
+            ctx, "image_url", "image-url", image_url, data=config_defaults
+        )
+        enable_snapshot = config_default_if_unprovided(
+            ctx,
+            "enable_snapshot",
+            "enable-snapshot",
+            enable_snapshot,
+            data=config_defaults,
+            getter=config_default_bool,
+        )
+        network_enable_public = config_default_if_unprovided(
+            ctx,
+            "network_enable_public",
+            "network-enable-public",
+            network_enable_public,
+            data=config_defaults,
+            getter=config_default_bool,
+        )
+        network_enable_private = config_default_if_unprovided(
+            ctx,
+            "network_enable_private",
+            "network-enable-private",
+            network_enable_private,
+            data=config_defaults,
+            getter=config_default_bool,
+        )
+        network_enable_shared_internet = config_default_if_unprovided(
+            ctx,
+            "network_enable_shared_internet",
+            "network-enable-shared-internet",
+            network_enable_shared_internet,
+            data=config_defaults,
+            getter=config_default_bool,
+        )
+        network_vpc_id = config_default_if_unprovided(
+            ctx,
+            "network_vpc_id",
+            "network-vpc-id",
+            network_vpc_id,
+            data=config_defaults,
+        )
+        network_subnet_ids = config_default_if_unprovided(
+            ctx,
+            "network_subnet_ids",
+            "network-subnet-ids",
+            network_subnet_ids,
+            data=config_defaults,
+            getter=config_default_list,
+            transform=lambda values: ",".join(values),
+        )
         skill_role_name, skill_role_name_provided = _resolve_create_extra_args(ctx)
         if not skill_role_name_provided:
             configured_role_name = config_default_str(

@@ -22,10 +22,12 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional
 
-from rich.console import Console
-from rich.table import Table
-
 from agentkit.sdk.tools import types as tools_types
+from agentkit.toolkit.cli.tool_lookup import (
+    list_tools_by_name,
+    print_tool_matches,
+    string_field,
+)
 from agentkit.toolkit.cli.sandbox.agentkit_client import (
     AgentkitToolsClient,
     is_tip_agentkit_client,
@@ -41,8 +43,6 @@ DEFAULT_SANDBOX_TOOL_TYPE = "CodeEnv"
 VALID_SANDBOX_TOOL_TYPES = ("CodeEnv", "SkillEnv", "Private")
 READY_TOOL_STATUS = "Ready"
 TOOL_NOT_FOUND_ERROR_CODE = "InvalidResource.NotFound"
-
-console = Console()
 
 
 class SandboxToolType(str, Enum):
@@ -447,36 +447,10 @@ def _list_first_tool(
 
 
 def _list_tools_by_name(client: AgentkitToolsClient, tool_name: str) -> list[object]:
-    request = tools_types.ListToolsRequest(
-        filters=[
-            tools_types.FiltersItemForListTools(
-                name="Name",
-                values=[tool_name],
-            )
-        ],
-        max_results=100,
-    )
     try:
-        response = client.list_tools(request)
+        return list_tools_by_name(client, tool_name)
     except Exception as exc:
         error(f"Failed to list sandbox tools by name {tool_name}: {exc}")
-    return list(response.tools or [])
-
-
-def _print_tool_name_matches(tool_name: str, matches: list[object]) -> None:
-    table = Table(title=f"Multiple sandbox tools matched: {tool_name}")
-    table.add_column("ToolId", style="cyan")
-    table.add_column("Name")
-    table.add_column("Status")
-    table.add_column("ToolType")
-    for item in matches:
-        table.add_row(
-            _get_string_field(item, "ToolId", "tool_id") or "",
-            _get_string_field(item, "Name", "name") or "",
-            _get_string_field(item, "Status", "status") or "",
-            _get_string_field(item, "ToolType", "tool_type") or "",
-        )
-    console.print(table)
 
 
 def _resolve_tool_id_by_name(
@@ -487,10 +461,14 @@ def _resolve_tool_id_by_name(
     if not matches:
         error(f"Sandbox tool not found by name: {tool_name}")
     if len(matches) > 1:
-        _print_tool_name_matches(tool_name, matches)
+        print_tool_matches(
+            tool_name,
+            matches,
+            title=f"Multiple sandbox tools matched: {tool_name}",
+        )
         error("Multiple sandbox tools matched --tool-name. Retry with --tool-id.")
 
-    resolved_tool_id = _get_string_field(matches[0], "ToolId", "tool_id")
+    resolved_tool_id = string_field(matches[0], "ToolId", "tool_id")
     if not resolved_tool_id:
         error(f"ListTools response missing ToolId for name: {tool_name}")
     return resolved_tool_id

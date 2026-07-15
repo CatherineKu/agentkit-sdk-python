@@ -21,7 +21,7 @@ import json
 import os
 from pathlib import Path
 import threading
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, TypeVar
 
 import yaml
 
@@ -62,6 +62,9 @@ SECRET_KEY_TOKENS = (
 
 class SandboxConfigError(ValueError):
     """Raised when sandbox config is invalid."""
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -392,21 +395,74 @@ def unset_config_value(data: dict[str, Any], key: str) -> tuple[str, bool]:
 
 
 def _merge_legacy_sandbox_yaml(data: dict[str, Any]) -> dict[str, Any]:
-    legacy_path = get_legacy_sandbox_config_path()
-    if not legacy_path.exists():
+    defaults = _load_legacy_sandbox_values(validate=False)
+    if not defaults:
         return data
-    legacy = _load_yaml_file(legacy_path)
     tool = data.setdefault("tool", {})
     if not isinstance(tool, dict):
         tool = {}
         data["tool"] = tool
-    tool_type = legacy.get("tool_type")
-    image_url = legacy.get("image_url")
-    if isinstance(tool_type, str) and tool_type.strip():
-        tool["type"] = tool_type.strip()
-    if isinstance(image_url, str) and image_url.strip():
-        tool["image_url"] = image_url.strip()
+    if "tool_type" in defaults:
+        tool["type"] = defaults["tool_type"]
+    if "image_url" in defaults:
+        tool["image_url"] = defaults["image_url"]
     return data
+
+
+def _load_legacy_sandbox_values(
+    *,
+    path: Optional[Path] = None,
+    validate: bool = True,
+) -> dict[str, str] | None:
+    legacy_path = path or get_legacy_sandbox_config_path()
+    if not legacy_path.exists():
+        return None
+
+    legacy = _load_yaml_file(legacy_path)
+    values: dict[str, str] = {}
+    raw_tool_type = legacy.get("tool_type")
+    raw_image_url = legacy.get("image_url")
+    if not isinstance(raw_tool_type, str) or not raw_tool_type.strip():
+        if validate:
+            raise SandboxConfigError(
+                f"Invalid {LEGACY_SANDBOX_CONFIG_PATH}: "
+                "tool_type must be a non-empty string"
+            )
+    else:
+        tool_type = raw_tool_type.strip()
+        if tool_type not in VALID_TOOL_TYPES:
+            if validate:
+                allowed = ", ".join(VALID_TOOL_TYPES)
+                raise SandboxConfigError(f"tool-type must be one of: {allowed}")
+            values["tool_type"] = tool_type
+        else:
+            values["tool_type"] = tool_type
+
+    if not isinstance(raw_image_url, str) or not raw_image_url.strip():
+        if validate:
+            raise SandboxConfigError(
+                f"Invalid {LEGACY_SANDBOX_CONFIG_PATH}: "
+                "image_url must be a non-empty string"
+            )
+    else:
+        values["image_url"] = raw_image_url.strip()
+
+    return values or None
+
+
+def load_legacy_sandbox_image_defaults(
+    *,
+    path: Optional[Path] = None,
+    validate: bool = True,
+) -> tuple[str, str] | None:
+    values = _load_legacy_sandbox_values(path=path, validate=validate)
+    if not values:
+        return None
+    tool_type = values.get("tool_type")
+    image_url = values.get("image_url")
+    if not tool_type or not image_url:
+        return None
+    return tool_type, image_url
 
 
 def ensure_sandbox_config_initialized() -> tuple[Path, dict[str, Any], bool]:
@@ -538,6 +594,36 @@ def config_default_list(
     if isinstance(value, list) and all(isinstance(item, str) for item in value):
         return list(value)
     return None
+
+
+def config_default_if_unprovided(
+    ctx: Any,
+    param_name: str,
+    key: str,
+    current: T,
+    *,
+    data: Optional[dict[str, Any]] = None,
+    getter: Callable[..., Any] = config_default_str,
+    transform: Optional[Callable[[Any], T]] = None,
+) -> T:
+    if param_was_provided(ctx, param_name):
+        return current
+    value = getter(key, data=data)
+    if value is None:
+        return current
+    return transform(value) if transform is not None else value
+
+
+def config_tool_id_default_if_unprovided(
+    ctx: Any,
+    *,
+    tool_id: Optional[str],
+    tool_name: Optional[str],
+    data: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    if param_was_provided(ctx, "tool_id") or param_was_provided(ctx, "tool_name"):
+        return tool_id
+    return config_default_str("tool-id", data=data) or tool_id
 
 
 def configured_network_payload(

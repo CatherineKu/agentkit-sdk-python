@@ -27,7 +27,7 @@ from agentkit.sdk.tools import types as tools_types
 console = Console()
 
 
-def _field_value(source: object, *keys: str) -> object:
+def field_value(source: object, *keys: str) -> object:
     for key in keys:
         if isinstance(source, dict):
             value = source.get(key)
@@ -41,31 +41,35 @@ def _field_value(source: object, *keys: str) -> object:
     return None
 
 
-def _string_field(source: object, *keys: str) -> str | None:
-    value = _field_value(source, *keys)
+def string_field(source: object, *keys: str) -> str | None:
+    value = field_value(source, *keys)
     if isinstance(value, str) and value.strip():
         return value.strip()
     return None
 
 
-def _print_tool_matches(tool_name: str, matches: list[object]) -> None:
-    table = Table(title=f"Multiple tools matched: {tool_name}")
+def print_tool_matches(
+    tool_name: str,
+    matches: list[object],
+    *,
+    title: str | None = None,
+) -> None:
+    table = Table(title=title or f"Multiple tools matched: {tool_name}")
     table.add_column("ToolId", style="cyan")
     table.add_column("Name")
     table.add_column("Status")
     table.add_column("ToolType")
     for item in matches:
         table.add_row(
-            _string_field(item, "ToolId", "tool_id") or "",
-            _string_field(item, "Name", "name") or "",
-            _string_field(item, "Status", "status") or "",
-            _string_field(item, "ToolType", "tool_type") or "",
+            string_field(item, "ToolId", "tool_id") or "",
+            string_field(item, "Name", "name") or "",
+            string_field(item, "Status", "status") or "",
+            string_field(item, "ToolType", "tool_type") or "",
         )
     console.print(table)
 
 
-def resolve_tool_id_by_name(client: object, tool_name: str) -> str:
-    """Resolve a tool name to one ToolId using ListTools exact-name filtering."""
+def list_tools_by_name(client: object, tool_name: str) -> list[object]:
     resolved_tool_name = (tool_name or "").strip()
     if not resolved_tool_name:
         raise typer.BadParameter("--tool-name cannot be empty")
@@ -80,16 +84,22 @@ def resolve_tool_id_by_name(client: object, tool_name: str) -> str:
         max_results=100,
     )
     response = client.list_tools(request)
-    matches = list(response.tools or [])
+    return list(response.tools or [])
+
+
+def resolve_tool_id_by_name(client: object, tool_name: str) -> str:
+    """Resolve a tool name to one ToolId using ListTools exact-name filtering."""
+    resolved_tool_name = (tool_name or "").strip()
+    matches = list_tools_by_name(client, resolved_tool_name)
     if not matches:
         raise typer.BadParameter(f"Tool not found by name: {resolved_tool_name}")
     if len(matches) > 1:
-        _print_tool_matches(resolved_tool_name, matches)
+        print_tool_matches(resolved_tool_name, matches)
         raise typer.BadParameter(
             "Multiple tools matched --tool-name. Retry with --tool-id."
         )
 
-    resolved_tool_id = _string_field(matches[0], "ToolId", "tool_id")
+    resolved_tool_id = string_field(matches[0], "ToolId", "tool_id")
     if not resolved_tool_id:
         raise typer.BadParameter(
             f"ListTools response missing ToolId for name: {resolved_tool_name}"

@@ -24,9 +24,9 @@ import typer
 
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
-    config_default_str,
+    config_default_if_unprovided,
+    config_tool_id_default_if_unprovided,
     configured_sandbox_config,
-    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.cli_exec import (
     _collect_exec_upload_sources,
@@ -118,31 +118,29 @@ def shell_command(
     """Execute a command in a sandbox shell."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
-        if not param_was_provided(ctx, "workspace"):
-            workspace = (
-                config_default_str("workspace", data=config_defaults) or workspace
-            )
-        if not param_was_provided(ctx, "dst_dir"):
-            dst_dir = config_default_str("dst-dir", data=config_defaults) or dst_dir
-        if not param_was_provided(ctx, "git_config"):
-            git_config = (
-                config_default_str("git-config", data=config_defaults) or git_config
-            )
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
+        workspace = config_default_if_unprovided(
+            ctx, "workspace", "workspace", workspace, data=config_defaults
+        )
+        dst_dir = config_default_if_unprovided(
+            ctx, "dst_dir", "dst-dir", dst_dir, data=config_defaults
+        )
+        git_config = config_default_if_unprovided(
+            ctx, "git_config", "git-config", git_config, data=config_defaults
+        )
         session = ensure_sandbox_session(
             session_id=session_id,
             tool_id=tool_id,

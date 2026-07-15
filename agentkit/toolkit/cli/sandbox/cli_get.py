@@ -23,9 +23,9 @@ import typer
 from agentkit.toolkit.cli.sandbox.agentkit_client import AgentkitToolsClient
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
-    config_default_str,
+    config_default_if_unprovided,
+    config_tool_id_default_if_unprovided,
     configured_sandbox_config,
-    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.session_create import SANDBOX_TOOL_ID_ENV
 from agentkit.toolkit.cli.sandbox.session_sync import sync_remote_sessions
@@ -81,21 +81,20 @@ def get_command(
     """Get a sandbox session after syncing remote sessions for the current tool."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
         resolved_tool_id = sync_remote_sessions(
             session_id=session_id,
             tool_id=tool_id,

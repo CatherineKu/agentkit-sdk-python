@@ -32,9 +32,9 @@ import typer
 from agentkit.toolkit.cli.sandbox.agentkit_client import AgentkitToolsClient
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
-    config_default_str,
+    config_default_if_unprovided,
+    config_tool_id_default_if_unprovided,
     configured_sandbox_config,
-    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.session_create import SANDBOX_TOOL_ID_ENV
 from agentkit.toolkit.cli.sandbox.session_sync import sync_remote_sessions
@@ -173,8 +173,8 @@ def _resolve_existing_session(
     *,
     session_id: str,
     tool_id: Optional[str],
-    tool_name: Optional[str],
     tool_type: SandboxToolType,
+    tool_name: Optional[str] = None,
 ) -> dict[str, object]:
     client = AgentkitToolsClient()
     resolved_tool_id = sync_remote_sessions(
@@ -657,27 +657,26 @@ def file_upload_command(
     """Upload a local directory or one or more files into a sandbox session."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "workspace"):
-            workspace = (
-                config_default_str("workspace", data=config_defaults) or workspace
-            )
-        if not param_was_provided(ctx, "dst_dir"):
-            dst_dir = config_default_str("dst-dir", data=config_defaults) or dst_dir
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        workspace = config_default_if_unprovided(
+            ctx, "workspace", "workspace", workspace, data=config_defaults
+        )
+        dst_dir = config_default_if_unprovided(
+            ctx, "dst_dir", "dst-dir", dst_dir, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
         if not session_id:
             error("--session-id is required")
         resolved_workspace = _normalize_workspace(workspace)
@@ -797,25 +796,23 @@ def file_download_command(
     local_archive_path: Path | None = None
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "workspace"):
-            workspace = (
-                config_default_str("workspace", data=config_defaults) or workspace
-            )
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        workspace = config_default_if_unprovided(
+            ctx, "workspace", "workspace", workspace, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
         if not session_id:
             error("--session-id is required")
         resolved_workspace = _normalize_workspace(workspace)
@@ -965,25 +962,23 @@ def file_list_command(
     """List files and directories in a sandbox workspace or path."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "workspace"):
-            workspace = (
-                config_default_str("workspace", data=config_defaults) or workspace
-            )
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        workspace = config_default_if_unprovided(
+            ctx, "workspace", "workspace", workspace, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
         if not session_id:
             error("--session-id is required")
         if max_depth is not None and max_depth < 0:

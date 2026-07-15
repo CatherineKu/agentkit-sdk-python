@@ -23,9 +23,9 @@ import typer
 
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
-    config_default_str,
+    config_default_if_unprovided,
+    config_tool_id_default_if_unprovided,
     configured_sandbox_config,
-    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.session_create import (
     SANDBOX_TOOL_ID_ENV,
@@ -78,14 +78,12 @@ def web_command(
     """Return the browser URL for a sandbox session."""
     try:
         config_defaults = configured_sandbox_config()
-        if not param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not param_was_provided(ctx, "tool_id") and not param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
         if not session_id:
             error("Missing option '--session-id'.")
         session, is_new = _resolve_web_session(

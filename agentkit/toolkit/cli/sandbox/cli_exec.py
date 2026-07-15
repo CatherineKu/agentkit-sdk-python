@@ -34,8 +34,10 @@ import typer
 from agentkit.toolkit.cli.sandbox.agentkit_client import AgentkitToolsClient
 from agentkit.toolkit.cli.sandbox.config_store import (
     SandboxConfigError,
-    config_default_str,
+    config_default_if_unprovided,
+    config_tool_id_default_if_unprovided,
     configured_sandbox_config,
+    param_was_provided,
 )
 from agentkit.toolkit.cli.sandbox.cli_file import (
     _build_remote_extract_command,
@@ -86,19 +88,6 @@ IS_WINDOWS = os.name == "nt"
 def _terminal_size() -> dict[str, int]:
     size = shutil.get_terminal_size(fallback=(120, 40))
     return {"cols": size.columns, "rows": size.lines}
-
-
-def _param_was_provided(ctx: typer.Context, param_name: str) -> bool:
-    get_source = getattr(ctx, "get_parameter_source", None)
-    if get_source is None:
-        return False
-    try:
-        source = get_source(param_name)
-    except Exception:
-        return False
-    return getattr(source, "name", None) == "COMMANDLINE" or str(source).endswith(
-        "COMMANDLINE"
-    )
 
 
 def _codex_hot_update_requested(
@@ -693,50 +682,53 @@ def exec_command(
     """Open a streaming sandbox exec session. Press Ctrl-] or type exit/exit()."""
     try:
         config_defaults = configured_sandbox_config()
-        if not _param_was_provided(ctx, "session_id"):
-            session_id = (
-                config_default_str("session-id", data=config_defaults) or session_id
-            )
-        if not _param_was_provided(ctx, "tool_id") and not _param_was_provided(
-            ctx, "tool_name"
-        ):
-            tool_id = config_default_str("tool-id", data=config_defaults) or tool_id
-        if not _param_was_provided(ctx, "tool_type"):
-            configured_tool_type = config_default_str(
-                "tool-type",
-                data=config_defaults,
-            )
-            if configured_tool_type:
-                tool_type = SandboxToolType(configured_tool_type)
-        if not _param_was_provided(ctx, "workspace"):
-            workspace = (
-                config_default_str("workspace", data=config_defaults) or workspace
-            )
-        if not _param_was_provided(ctx, "dst_dir"):
-            dst_dir = config_default_str("dst-dir", data=config_defaults) or dst_dir
-        if not _param_was_provided(ctx, "git_config"):
-            git_config = (
-                config_default_str("git-config", data=config_defaults) or git_config
-            )
-        if not _param_was_provided(ctx, "model_name"):
-            model_name = (
-                config_default_str("model-name", data=config_defaults) or model_name
-            )
-        if not _param_was_provided(ctx, "model_api_key"):
-            model_api_key = (
-                config_default_str("model-api-key", data=config_defaults)
-                or model_api_key
-            )
-        if not _param_was_provided(ctx, "model_provider"):
-            model_provider = (
-                config_default_str("model-provider", data=config_defaults)
-                or model_provider
-            )
-        if not _param_was_provided(ctx, "model_base_url"):
-            model_base_url = (
-                config_default_str("model-base-url", data=config_defaults)
-                or model_base_url
-            )
+        session_id = config_default_if_unprovided(
+            ctx, "session_id", "session-id", session_id, data=config_defaults
+        )
+        tool_id = config_tool_id_default_if_unprovided(
+            ctx, tool_id=tool_id, tool_name=tool_name, data=config_defaults
+        )
+        tool_type = config_default_if_unprovided(
+            ctx,
+            "tool_type",
+            "tool-type",
+            tool_type,
+            data=config_defaults,
+            transform=SandboxToolType,
+        )
+        workspace = config_default_if_unprovided(
+            ctx, "workspace", "workspace", workspace, data=config_defaults
+        )
+        dst_dir = config_default_if_unprovided(
+            ctx, "dst_dir", "dst-dir", dst_dir, data=config_defaults
+        )
+        git_config = config_default_if_unprovided(
+            ctx, "git_config", "git-config", git_config, data=config_defaults
+        )
+        model_name = config_default_if_unprovided(
+            ctx, "model_name", "model-name", model_name, data=config_defaults
+        )
+        model_api_key = config_default_if_unprovided(
+            ctx,
+            "model_api_key",
+            "model-api-key",
+            model_api_key,
+            data=config_defaults,
+        )
+        model_provider = config_default_if_unprovided(
+            ctx,
+            "model_provider",
+            "model-provider",
+            model_provider,
+            data=config_defaults,
+        )
+        model_base_url = config_default_if_unprovided(
+            ctx,
+            "model_base_url",
+            "model-base-url",
+            model_base_url,
+            data=config_defaults,
+        )
         if tool_name:
             tool_id = resolve_existing_sandbox_tool_id(
                 tool_id=tool_id,
@@ -747,9 +739,9 @@ def exec_command(
             )
             tool_name = None
         exec_mode = _normalize_exec_mode(mode)
-        model_api_key_was_provided = _param_was_provided(ctx, "model_api_key")
-        model_name_was_provided = _param_was_provided(ctx, "model_name")
-        model_base_url_was_provided = _param_was_provided(ctx, "model_base_url")
+        model_api_key_was_provided = param_was_provided(ctx, "model_api_key")
+        model_name_was_provided = param_was_provided(ctx, "model_name")
+        model_base_url_was_provided = param_was_provided(ctx, "model_base_url")
         resolved_model_provider = _resolve_exec_model_provider(
             session_id=session_id,
             tool_id=tool_id,
