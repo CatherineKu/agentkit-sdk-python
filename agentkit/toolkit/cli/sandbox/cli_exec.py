@@ -23,9 +23,7 @@ import shlex
 import shutil
 import signal
 import sys
-import termios
 import threading
-import tty
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Optional
@@ -77,6 +75,7 @@ EXEC_MODE_TMUX = "tmux"
 CODEX_HOT_UPDATE_TIMEOUT_SECONDS = 300
 CODEX_HOT_UPDATE_REQUEST_TIMEOUT = 30
 CODEX_HOT_UPDATE_REQUEST_HARD_TIMEOUT = 90
+IS_WINDOWS = os.name == "nt"
 
 
 def _terminal_size() -> dict[str, int]:
@@ -181,7 +180,14 @@ def _hot_update_codex_config(
 
 @contextmanager
 def _raw_terminal_mode() -> Iterator[None]:
-    if not sys.stdin.isatty():
+    if IS_WINDOWS or not sys.stdin.isatty():
+        yield
+        return
+
+    try:
+        import termios
+        import tty
+    except ImportError:  # pragma: no cover - POSIX-only modules are unavailable.
         yield
         return
 
@@ -202,7 +208,86 @@ def _send_resize(ws) -> None:
     _send_json(ws, {"type": "resize", "data": _terminal_size()})
 
 
+def _process_stdin_data(
+    ws,
+    stop_event: threading.Event,
+    line_buffer: bytes,
+    data: bytes,
+) -> bytes:
+    if DETACH_SEQUENCE in data:
+        before_detach = data.split(DETACH_SEQUENCE, 1)[0]
+        if before_detach:
+            _send_json(
+                ws,
+                {
+                    "type": "input",
+                    "data": before_detach.decode("utf-8", errors="ignore"),
+                },
+            )
+        stop_event.set()
+        ws.close()
+        return b""
+
+    normalized_data = data.replace(b"\r", b"\n")
+    line_buffer += normalized_data
+    has_newline = b"\n" in normalized_data
+    line_parts = line_buffer.split(b"\n")
+    complete_lines = line_parts[:-1]
+    line_buffer = line_parts[-1]
+    if has_newline and any(_is_local_exit_line(line) for line in complete_lines):
+        stop_event.set()
+        ws.close()
+        return b""
+
+    _send_json(
+        ws,
+        {
+            "type": "input",
+            "data": data.decode("utf-8", errors="ignore"),
+        },
+    )
+    return line_buffer
+
+
+def _stream_windows_stdin(ws, stop_event: threading.Event) -> None:
+    try:
+        import msvcrt
+    except ImportError:
+        error("Windows console input requires the msvcrt standard library module")
+
+    line_buffer = b""
+    while not stop_event.is_set():
+        if not msvcrt.kbhit():
+            stop_event.wait(0.1)
+            continue
+
+        char = msvcrt.getwch()
+        data = _windows_console_char_to_bytes(char, msvcrt)
+        if not data:
+            continue
+        line_buffer = _process_stdin_data(ws, stop_event, line_buffer, data)
+
+
+def _windows_console_char_to_bytes(char: str, msvcrt) -> bytes:
+    if char in ("\x00", "\xe0"):
+        key = msvcrt.getwch()
+        return {
+            "H": b"\x1b[A",  # Up
+            "P": b"\x1b[B",  # Down
+            "K": b"\x1b[D",  # Left
+            "M": b"\x1b[C",  # Right
+            "G": b"\x1b[H",  # Home
+            "O": b"\x1b[F",  # End
+            "S": b"\x1b[3~",  # Delete
+        }.get(key, b"")
+    return char.encode("utf-8", errors="ignore")
+
+
 def _stream_stdin(ws, stop_event: threading.Event) -> None:
+    if IS_WINDOWS:
+        _stream_windows_stdin(ws, stop_event)
+        return
+
     fd = sys.stdin.fileno()
     line_buffer = b""
     while not stop_event.is_set():
@@ -214,38 +299,7 @@ def _stream_stdin(ws, stop_event: threading.Event) -> None:
         if not data:
             break
 
-        if DETACH_SEQUENCE in data:
-            before_detach = data.split(DETACH_SEQUENCE, 1)[0]
-            if before_detach:
-                _send_json(
-                    ws,
-                    {
-                        "type": "input",
-                        "data": before_detach.decode("utf-8", errors="ignore"),
-                    },
-                )
-            stop_event.set()
-            ws.close()
-            break
-
-        normalized_data = data.replace(b"\r", b"\n")
-        line_buffer += normalized_data
-        has_newline = b"\n" in normalized_data
-        line_parts = line_buffer.split(b"\n")
-        complete_lines = line_parts[:-1]
-        line_buffer = line_parts[-1]
-        if has_newline and any(_is_local_exit_line(line) for line in complete_lines):
-            stop_event.set()
-            ws.close()
-            break
-
-        _send_json(
-            ws,
-            {
-                "type": "input",
-                "data": data.decode("utf-8", errors="ignore"),
-            },
-        )
+        line_buffer = _process_stdin_data(ws, stop_event, line_buffer, data)
 
 
 def _is_local_exit_line(line: bytes) -> bool:

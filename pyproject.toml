@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agentkit-sdk-python"
-version = "0.7.12"
+version = "0.7.13"
 description = "Python SDK for transforming any AI agent into a production-ready application. Framework-agnostic primitives for runtime, memory, authentication, and tools with volcengine-managed infrastructure."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -39,6 +39,7 @@ dependencies = [
     "PyJWT>=2.10.1",
     "uvicorn>=0.37.0",
     "pyyaml",
+    "tomli>=2.0.1; python_version < '3.11'",
     "python-dotenv>=1.1.0",
     "prompt_toolkit",
     "typer",

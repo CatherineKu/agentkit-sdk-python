@@ -17,6 +17,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
+import sys
 import tarfile
 
 import pytest
@@ -6484,5 +6485,52 @@ def test_cli_exec_exit_command_allows_prefix_buffer(
 
     cli_exec._stream_stdin(ws, stop_event)
 
+    assert ws.closed is True
+    assert stop_event.is_set()
+
+
+def test_cli_exec_windows_stdin_uses_msvcrt(monkeypatch) -> None:
+    import threading
+    import agentkit.toolkit.cli.sandbox.cli_exec as cli_exec
+
+    class FakeMsvcrt:
+        def __init__(self):
+            self.chars = list("pwd\r") + list("exit\r")
+
+        def kbhit(self):
+            return bool(self.chars)
+
+        def getwch(self):
+            return self.chars.pop(0)
+
+    class FakeWs:
+        def __init__(self):
+            self.messages = []
+            self.closed = False
+
+        def send(self, message):
+            self.messages.append(json.loads(message))
+
+        def close(self):
+            self.closed = True
+
+    ws = FakeWs()
+    stop_event = threading.Event()
+
+    monkeypatch.setattr(cli_exec, "IS_WINDOWS", True)
+    monkeypatch.setitem(sys.modules, "msvcrt", FakeMsvcrt())
+
+    cli_exec._stream_stdin(ws, stop_event)
+
+    assert [message["data"] for message in ws.messages] == [
+        "p",
+        "w",
+        "d",
+        "\r",
+        "e",
+        "x",
+        "i",
+        "t",
+    ]
     assert ws.closed is True
     assert stop_event.is_set()
